@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-GB10_HOST="192.168.50.194"
-GB10_USER="lesha"
-REMOTE_DIR="/home/lesha/spark-dashboard"
+GB10_HOST="${GB10_HOST:-}"
+GB10_USER="${GB10_USER:-$USER}"
+REMOTE_DIR="/home/${GB10_USER}/spark-dashboard"
+
+if [ -z "$GB10_HOST" ]; then
+  echo "Usage: GB10_HOST=<ip> ./deploy.sh"
+  echo "  Optionally set GB10_USER (default: \$USER)"
+  exit 1
+fi
 
 echo "==> Deploying spark-dashboard to ${GB10_USER}@${GB10_HOST}:${REMOTE_DIR}"
 

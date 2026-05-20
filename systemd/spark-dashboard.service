@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/lesha/spark-dashboard
-Environment=PYTHONPATH=/home/lesha/sparkview
-ExecStart=/home/lesha/spark-dashboard/.venv/bin/uvicorn spark_dashboard.app:app --host 0.0.0.0 --port 8500 --no-access-log
+WorkingDirectory=%h/spark-dashboard
+Environment=PYTHONPATH=%h/sparkview
+ExecStart=%h/spark-dashboard/.venv/bin/uvicorn spark_dashboard.app:app --host 0.0.0.0 --port 8500 --no-access-log
 Restart=always
 RestartSec=5
 

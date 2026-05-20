@@ -39,13 +39,15 @@ Open http://<your-ip>:8500
 ### Deploy with systemd (auto-start)
 
 ```bash
-./deploy.sh
+GB10_HOST=192.168.x.x ./deploy.sh
 ```
 
 ## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `GB10_HOST` | _(required)_ | IP address of the GB10 device |
+| `GB10_USER` | `$USER` | SSH user on the GB10 device |
 | `PYTHONPATH` | `~/sparkview` | Path to SparkView package |
 | Port | `8500` | Configured in systemd unit |
 
