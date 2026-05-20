@@ -34,7 +34,7 @@ python3 -m venv .venv
 PYTHONPATH=~/sparkview .venv/bin/uvicorn spark_dashboard.app:app --host 0.0.0.0 --port 8500
 ```
 
-Open http://192.168.50.194:8500
+Open http://<your-ip>:8500
 
 ### Deploy with systemd (auto-start)
 
@@ -46,7 +46,7 @@ Open http://192.168.50.194:8500
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PYTHONPATH` | `/home/lesha/sparkview` | Path to SparkView package |
+| `PYTHONPATH` | `~/sparkview` | Path to SparkView package |
 | Port | `8500` | Configured in systemd unit |
 
 ## API
