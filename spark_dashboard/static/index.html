@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SparkView Dashboard</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header id="header">
+    <div class="header-left">
+      <span class="logo">SPARK<span class="logo-accent">VIEW</span></span>
+      <span id="hostname" class="header-info"></span>
+    </div>
+    <div class="header-right">
+      <span id="gpu-name" class="header-info"></span>
+      <span id="driver-info" class="header-info"></span>
+      <span id="uptime-info" class="header-info"></span>
+      <span id="conn-status" class="conn-dot connected" title="Connected"></span>
+    </div>
+  </header>
+
+  <main class="grid">
+    <!-- GPU -->
+    <section class="card" id="card-gpu">
+      <h2 class="card-title">GPU</h2>
+      <div class="metric-row">
+        <span class="label">Utilization</span>
+        <div class="bar-track"><div id="gpu-util-bar" class="bar-fill"></div></div>
+        <span id="gpu-util-text" class="value"></span>
+      </div>
+      <div class="metric-row">
+        <span class="label">Memory</span>
+        <div class="bar-track"><div id="gpu-mem-bar" class="bar-fill"></div></div>
+        <span id="gpu-mem-text" class="value"></span>
+      </div>
+      <div class="stats-row">
+        <span id="gpu-temp" class="stat"></span>
+        <span id="gpu-power" class="stat"></span>
+        <span id="gpu-uma" class="stat badge"></span>
+      </div>
+      <div id="gpu-procs" class="proc-table"></div>
+    </section>
+
+    <!-- Memory -->
+    <section class="card" id="card-memory">
+      <h2 class="card-title">MEMORY</h2>
+      <div class="metric-row">
+        <span class="label">RAM</span>
+        <div class="bar-track"><div id="mem-bar" class="bar-fill"></div></div>
+        <span id="mem-text" class="value"></span>
+      </div>
+      <div class="metric-row" id="swap-row">
+        <span class="label">Swap</span>
+        <div class="bar-track"><div id="swap-bar" class="bar-fill"></div></div>
+        <span id="swap-text" class="value"></span>
+      </div>
+    </section>
+
+    <!-- CPU -->
+    <section class="card" id="card-cpu">
+      <h2 class="card-title">CPU</h2>
+      <div class="metric-row">
+        <span class="label">Overall</span>
+        <div class="bar-track"><div id="cpu-bar" class="bar-fill"></div></div>
+        <span id="cpu-text" class="value"></span>
+      </div>
+      <div id="cpu-cores" class="core-grid"></div>
+      <div class="stats-row">
+        <span id="cpu-temp" class="stat"></span>
+        <span id="cpu-freq" class="stat"></span>
+      </div>
+    </section>
+
+    <!-- Throttle -->
+    <section class="card" id="card-throttle">
+      <h2 class="card-title">CLOCK</h2>
+      <div class="metric-row">
+        <span class="label">Speed</span>
+        <div class="bar-track"><div id="clk-bar" class="bar-fill"></div></div>
+        <span id="clk-text" class="value"></span>
+      </div>
+      <div class="stats-row">
+        <span id="clk-status" class="stat badge"></span>
+        <span id="clk-pstate" class="stat"></span>
+      </div>
+      <div id="clk-reasons" class="reasons"></div>
+    </section>
+
+    <!-- Power Rails -->
+    <section class="card" id="card-power">
+      <h2 class="card-title">POWER RAILS</h2>
+      <div id="power-content"></div>
+    </section>
+
+    <!-- Network -->
+    <section class="card" id="card-network">
+      <h2 class="card-title">NETWORK</h2>
+      <div id="net-content"></div>
+    </section>
+
+    <!-- Pressure -->
+    <section class="card" id="card-pressure">
+      <h2 class="card-title">PRESSURE</h2>
+      <div class="metric-row">
+        <span class="label">Some avg10</span>
+        <div class="bar-track"><div id="psi-some-bar" class="bar-fill"></div></div>
+        <span id="psi-some-text" class="value"></span>
+      </div>
+      <div class="metric-row">
+        <span class="label">Full avg10</span>
+        <div class="bar-track"><div id="psi-full-bar" class="bar-fill"></div></div>
+        <span id="psi-full-text" class="value"></span>
+      </div>
+      <div class="stats-row">
+        <span id="psi-level" class="stat badge"></span>
+      </div>
+    </section>
+
+    <!-- Disk -->
+    <section class="card" id="card-disk">
+      <h2 class="card-title">DISK</h2>
+      <div id="disk-content"></div>
+    </section>
+  </main>
+
+  <footer id="footer">
+    <span id="last-refresh"></span>
+    <span id="kernel-info" class="footer-secondary"></span>
+  </footer>
+
+  <script src="/dashboard.js"></script>
+</body>
+</html>
