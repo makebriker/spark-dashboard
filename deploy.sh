@@ -43,7 +43,7 @@ if [ ! -d .git ]; then
 fi
 
 git fetch -q origin "$BRANCH"
-git checkout -q -B "$BRANCH" "origin/$BRANCH"
+git checkout -q -f -B "$BRANCH" "origin/$BRANCH"
 git reset -q --hard "origin/$BRANCH"
 echo "==> At $(git log --oneline -1)"
 
