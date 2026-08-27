@@ -247,15 +247,28 @@ function updateHeader(data) {
   document.getElementById('kernel-info').textContent = info.kernel ? 'Kernel ' + info.kernel : '';
 }
 
+// Each card renders independently. Run them isolated so one failure -- a
+// renamed id, a missing key in the payload -- degrades to that single card
+// instead of silently blanking every card after it in the list.
+const SECTIONS = [
+  ['header', updateHeader],
+  ['gpu', updateGPU],
+  ['memory', updateMemory],
+  ['cpu', updateCPU],
+  ['throttle', updateThrottle],
+  ['network', updateNetwork],
+  ['pressure', updatePressure],
+  ['disk', updateDisk],
+];
+
 function updateAll(data) {
-  updateHeader(data);
-  updateGPU(data);
-  updateMemory(data);
-  updateCPU(data);
-  updateThrottle(data);
-  updateNetwork(data);
-  updatePressure(data);
-  updateDisk(data);
+  for (const [name, render] of SECTIONS) {
+    try {
+      render(data);
+    } catch (err) {
+      console.error('SparkView: ' + name + ' failed to render', err);
+    }
+  }
 
   const t = new Date().toLocaleTimeString();
   document.getElementById('last-refresh').textContent = 'Last update: ' + t;
