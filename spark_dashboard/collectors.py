@@ -12,14 +12,20 @@ import psutil
 # SparkView layers (requires PYTHONPATH to include ~/sparkview)
 from sparkview.layers import power_rails
 from sparkview.layers.cpu import get_cpu_info
-from sparkview.layers.gpu import get_gpu_info
 from sparkview.layers.info import get_info
 from sparkview.layers.memory import get_memory
-from sparkview.layers.network import get_net_info as _sv_get_net_info
 from sparkview.layers.power import get_power_info
 from sparkview.layers.pressure import get_pressure
-from sparkview.layers.throttle import get_throttle_info
 
+# Wraps sparkview.layers.network — adds onboard ethernet, WiFi and IPv4
+from spark_dashboard.net_extra import get_net_info_all
+
+# Wraps sparkview.layers.gpu / throttle — corrects mem_used and the
+# throttle-bit table without touching the upstream clone (see PATCHES.md)
+from spark_dashboard.gpu_throttle_fix import get_gpu_info_fixed as get_gpu_info
+from spark_dashboard.gpu_throttle_fix import get_throttle_info_fixed as get_throttle_info
+
+NET_SYS = psutil.Path("/sys/class/net") if hasattr(psutil, "Path") else None
 SKIP_IFACES = {"lo", "docker0"}
 SKIP_PREFIXES = ("br-",)
 _prev_net: dict[str, dict] = {}
@@ -122,8 +128,8 @@ def get_metrics() -> dict:
     power = _safe_call(get_power_info, default={"available": False})
     info = _safe_call(get_info, default={})
 
-    # Try SparkView's ConnectX-7 aware collector first, then fallback to generic
-    net = _safe_call(_sv_get_net_info, default=[])
+    # CX7 ports + onboard ethernet + WiFi, with IPv4; generic fallback if that fails
+    net = _safe_call(get_net_info_all, default=[])
     if not net:
         net = get_net_info_fallback()
 

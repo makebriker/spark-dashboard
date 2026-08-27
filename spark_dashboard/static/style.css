@@ -276,17 +276,6 @@ main.grid {
   color: var(--text-dim);
 }
 
-/* Power */
-.power-row {
-  display: flex;
-  justify-content: space-between;
-  padding: 4px 0;
-  font-size: 13px;
-}
-
-.power-label { color: var(--text-dim); }
-.power-value { font-family: var(--mono); color: var(--text); }
-
 /* Disk */
 .disk-mount {
   margin-bottom: 10px;

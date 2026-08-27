@@ -55,6 +55,21 @@
         <div class="bar-track"><div id="swap-bar" class="bar-fill"></div></div>
         <span id="swap-text" class="value"></span>
       </div>
+      <div id="psi-rows">
+        <div class="metric-row">
+          <span class="label">PSI some</span>
+          <div class="bar-track"><div id="psi-some-bar" class="bar-fill"></div></div>
+          <span id="psi-some-text" class="value"></span>
+        </div>
+        <div class="metric-row">
+          <span class="label">PSI full</span>
+          <div class="bar-track"><div id="psi-full-bar" class="bar-fill"></div></div>
+          <span id="psi-full-text" class="value"></span>
+        </div>
+        <div class="stats-row">
+          <span id="psi-level" class="stat badge"></span>
+        </div>
+      </div>
     </section>
 
     <!-- CPU -->
@@ -87,34 +102,10 @@
       <div id="clk-reasons" class="reasons"></div>
     </section>
 
-    <!-- Power Rails -->
-    <section class="card" id="card-power">
-      <h2 class="card-title">POWER RAILS</h2>
-      <div id="power-content"></div>
-    </section>
-
     <!-- Network -->
     <section class="card" id="card-network">
       <h2 class="card-title">NETWORK</h2>
       <div id="net-content"></div>
-    </section>
-
-    <!-- Pressure -->
-    <section class="card" id="card-pressure">
-      <h2 class="card-title">PRESSURE</h2>
-      <div class="metric-row">
-        <span class="label">Some avg10</span>
-        <div class="bar-track"><div id="psi-some-bar" class="bar-fill"></div></div>
-        <span id="psi-some-text" class="value"></span>
-      </div>
-      <div class="metric-row">
-        <span class="label">Full avg10</span>
-        <div class="bar-track"><div id="psi-full-bar" class="bar-fill"></div></div>
-        <span id="psi-full-text" class="value"></span>
-      </div>
-      <div class="stats-row">
-        <span id="psi-level" class="stat badge"></span>
-      </div>
     </section>
 
     <!-- Disk -->

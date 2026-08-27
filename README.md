@@ -6,13 +6,12 @@ Web dashboard for the NVIDIA Grace Blackwell GB10 (ASUS GX10) that exposes Spark
 
 ## Features
 
-- **GPU** — Utilization, temperature, power draw, UMA-aware memory, top processes
-- **Memory** — RAM and swap usage with GB10 unified memory awareness
+- **GPU** — Utilization, temperature, power draw, true UMA-aware memory, top processes
+- **Memory** — RAM and swap usage, plus PSI memory-pressure levels (LOW/MOD/HIGH/CRITICAL)
 - **CPU** — Per-core utilization, temperature, frequency
 - **Clock/Throttle** — Clock speed, P-state, throttle status (IDLE/PASS/LOCKED/THROTTLED)
-- **Power Rails** — GPU draw, peak, DC input, SysPL1 cap, PROCHOT, PL level, Tj rise
-- **PSI Pressure** — Memory pressure levels (LOW/MOD/HIGH/CRITICAL)
-- **Network** — ConnectX-7 interface state, TX/RX rates, errors
+- **Network** — Every physical interface with its IPv4 address; **RDMA-aware** TX/RX
+  rates on the ConnectX-7 QSFP ports, which kernel counters cannot see
 - **Disk** — Per-mountpoint usage with color thresholds
 
 Auto-refreshes every 2 seconds. No external dependencies — works entirely offline on the LAN.
@@ -38,16 +37,24 @@ Open http://<your-ip>:8500
 
 ### Deploy with systemd (auto-start)
 
+The deployed directory is a git checkout of this repository, so deploying is a fetch
+plus a restart. `deploy.sh` also converts a non-git directory in place on first run,
+taking a backup first and preserving the gitignored `.venv/`:
+
 ```bash
-GB10_HOST=192.168.x.x ./deploy.sh
+HOST=<ip-or-hostname> ./deploy.sh
 ```
+
+It installs the systemd user unit, restarts it, verifies `/api/metrics` answers, and
+prints `git status` so any local drift on the box is visible.
 
 ## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GB10_HOST` | _(required)_ | IP address of the GB10 device |
-| `GB10_USER` | `$USER` | SSH user on the GB10 device |
+| `HOST` | _(required)_ | IP or hostname of the GB10 device |
+| `USER_REMOTE` | `lesha` | SSH user on the GB10 device |
+| `BRANCH` | `main` | Branch to deploy |
 | `PYTHONPATH` | `~/sparkview` | Path to SparkView package |
 | Port | `8500` | Configured in systemd unit |
 
@@ -69,6 +76,10 @@ Browser ──HTTP──> uvicorn (FastAPI)
                       │
                       ├── spark_dashboard.app (routes)
                       ├── spark_dashboard.collectors (metric aggregation)
+                      │
+                      ├── spark_dashboard.net_extra ─────┐  local fixes over
+                      ├── spark_dashboard.gpu_throttle_fix ┤  upstream — see
+                      │                                  ─┘  PATCHES.md
                       └── sparkview.layers.* (SparkView's metric modules)
                               ├── gpu.py (nvitop/NVML)
                               ├── memory.py (psutil)
@@ -79,6 +90,12 @@ Browser ──HTTP──> uvicorn (FastAPI)
                               ├── network.py (sysfs)
                               └── info.py (nvitop + /proc)
 ```
+
+`net_extra.py` and `gpu_throttle_fix.py` wrap three upstream SparkView layers that
+return wrong or incomplete numbers on GB10 — missing network interfaces, RDMA traffic
+invisible to kernel counters, GPU memory reported as system memory, and a throttle-bit
+table that mislabels software thermal events as hardware faults. The upstream clone is
+deliberately left untouched. **See [PATCHES.md](PATCHES.md).**
 
 ## License
 
