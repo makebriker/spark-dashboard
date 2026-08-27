@@ -126,6 +126,15 @@ card already shows. The card was pure duplication and has been removed.
 unaffected. If the rail telemetry becomes available on your hardware, the collector
 side is intact and only the frontend card needs restoring.
 
+**Upgrade note.** Removing a card changes `index.html` and `dashboard.js` together,
+and the two must stay in lockstep — a cached `dashboard.js` looking up an id the new
+HTML no longer has will throw. Originally none of the three frontend files sent a
+`Cache-Control` header, so browsers applied heuristic freshness to `etag`/
+`last-modified` and could skip revalidation; the symptom was NETWORK and DISK
+rendering empty while every card above them was fine, because the throw aborted
+`updateAll()` partway down the list. They are now served `Cache-Control: no-cache`,
+and `updateAll()` renders each card isolated so one failure cannot blank the rest.
+
 ## Verifying the patches
 
 ```bash
