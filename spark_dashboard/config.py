@@ -35,11 +35,12 @@ VLLM_METRICS = (
     "waiting",        # requests queued
     "kv_cache",       # KV cache utilisation, %
     "ttft",           # mean time to first token over the window
-    "itl",            # mean inter-token latency (TPOT) over the window
+    "itl",            # mean time per output token (TPOT) over the window
     "e2e",            # mean end-to-end request latency over the window
     "req_rate",       # completed requests / s
     "prefix_hit",     # prefix-cache hit rate over the window
     "spec_accept",    # speculative-decoding acceptance rate over the window
+    "spec_len",       # speculative decoding: mean tokens emitted per step
     "preemptions",    # preemptions over the window
     "max_model_len",  # served context length
 )

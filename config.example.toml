@@ -51,11 +51,13 @@ endpoints = []
 #   waiting        requests queued
 #   kv_cache       KV-cache utilisation (shown as a bar)
 #   ttft           mean time to first token
-#   itl            mean inter-token latency (TPOT)
+#   itl            mean time per output token (TPOT); with speculative
+#                  decoding this is per token, not per engine step
 #   e2e            mean end-to-end request latency
 #   req_rate       completed requests per second
 #   prefix_hit     prefix-cache hit rate
 #   spec_accept    speculative-decoding acceptance rate
+#   spec_len       speculative decoding: mean tokens per step ("acceptance length")
 #   preemptions    preemptions within the window
 #   max_model_len  served context length
 metrics = ["decode_tps", "stream_tps", "prefill_tps", "running", "waiting",

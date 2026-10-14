@@ -287,11 +287,12 @@ const VLLM_TILES = {
   running: ['Running', v => num(v, 0), null],
   waiting: ['Waiting', v => num(v, 0), null],
   ttft: ['TTFT', ms, null],
-  itl: ['ITL / TPOT', ms, null],
+  itl: ['TPOT', ms, null],
   e2e: ['E2E latency', ms, null],
   req_rate: ['Requests', v => num(v, 2), 'req/s'],
   prefix_hit: ['Prefix hit', v => num(v, 1), '%'],
   spec_accept: ['Spec accept', v => num(v, 1), '%'],
+  spec_len: ['Accept len', v => num(v, 2), 'tok/step'],
   preemptions: ['Preemptions', v => num(v, 0), null],
   max_model_len: ['Context', v => v == null ? '—' : v >= 1024 ? Math.round(v / 1024) + 'k' : String(v), null],
 };

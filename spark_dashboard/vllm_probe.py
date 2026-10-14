@@ -56,15 +56,19 @@ _COUNTERS = {
     "prefix_queries": ("vllm:prefix_cache_queries_total", "vllm:prefix_cache_queries"),
     "spec_accepted": ("vllm:spec_decode_num_accepted_tokens_total",),
     "spec_draft": ("vllm:spec_decode_num_draft_tokens_total",),
+    "spec_drafts": ("vllm:spec_decode_num_drafts_total",),
 }
 
 _HISTOGRAMS = {
     "ttft": ("vllm:time_to_first_token_seconds",),
-    "itl": (
-        "vllm:inter_token_latency_seconds",
-        "vllm:time_per_output_token_seconds",
-        "vllm:request_time_per_output_token_seconds",
-    ),
+    # Observed once per engine *step* per running request -- not per token.
+    # With speculative decoding a step emits several tokens, so sum/count is
+    # the step time and 1/that undercounts decode speed by the acceptance
+    # length (3x on an MTP-3 server). Use it as stream-time, not as latency.
+    "itl": ("vllm:inter_token_latency_seconds", "vllm:time_per_output_token_seconds"),
+    # One observation per finished request: its decode time / output tokens.
+    # Correct per token, but only moves when a request completes.
+    "tpot_req": ("vllm:request_time_per_output_token_seconds",),
     "e2e": ("vllm:e2e_request_latency_seconds",),
 }
 
@@ -246,7 +250,18 @@ class _Endpoint:
             return n / d if n is not None and d else None
 
         gauges = {k: _first(raw, names) for k, names in _GAUGES.items()}
-        itl = ratio("itl_sum", "itl_count")
+        # Per-stream decode speed = decode tokens / stream-seconds spent
+        # decoding. The ITL sum is exactly those stream-seconds (each running
+        # request contributes its own step intervals), so this holds for any
+        # concurrency and any speculative acceptance length. First tokens are
+        # timed by TTFT, not ITL, so they come out of the numerator.
+        stream_tps = None
+        gen, itl_time = delta("gen_tokens"), delta("itl_sum")
+        if gen is not None and itl_time:
+            stream_tps = max(0.0, gen - (delta("ttft_count") or 0)) / itl_time or None
+        elif (tpot := ratio("tpot_req_sum", "tpot_req_count")):
+            stream_tps = 1.0 / tpot
+        itl = 1.0 / stream_tps if stream_tps else None
         prefix_hit = ratio("prefix_hits", "prefix_queries")
         if prefix_hit is None and gauges["prefix_hit_v0"] is not None:
             prefix_hit = gauges["prefix_hit_v0"]
@@ -258,7 +273,7 @@ class _Endpoint:
             window_s=round(dt, 1),
             metrics={
                 "decode_tps": rate("gen_tokens"),
-                "stream_tps": 1.0 / itl if itl else None,
+                "stream_tps": stream_tps,
                 "prefill_tps": rate("prompt_tokens"),
                 "running": gauges["running"],
                 "waiting": gauges["waiting"],
@@ -269,6 +284,7 @@ class _Endpoint:
                 "req_rate": rate("requests"),
                 "prefix_hit": prefix_hit * 100 if prefix_hit is not None else None,
                 "spec_accept": (r * 100 if (r := ratio("spec_accepted", "spec_draft")) is not None else None),
+                "spec_len": (1 + r if (r := ratio("spec_accepted", "spec_drafts")) is not None else None),
                 "preemptions": delta("preemptions"),
                 "max_model_len": (model or {}).get("max_model_len") or _cmdline_max_len.get(self.url),
             },

@@ -15,7 +15,7 @@ Web dashboard for the NVIDIA Grace Blackwell GB10 (ASUS GX10) that exposes Spark
 - **Disk** — Per-mountpoint usage with color thresholds
 - **Inference (vLLM)** — detected automatically when a vLLM server runs on the node:
   decode throughput (aggregate and per stream), prefill rate, running/waiting requests,
-  KV-cache use, TTFT, inter-token latency, prefix-cache hit rate and more, with a
+  KV-cache use, TTFT, time per output token, prefix-cache hit rate and more, with a
   decode-throughput sparkline
 - **Multi-node** — up to 4 Sparks on one board, side by side or stacked
 - **Configurable** — which cards appear, in what order, per-card filters, which vLLM
