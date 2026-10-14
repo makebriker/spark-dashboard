@@ -339,7 +339,7 @@ function updateVLLM(F, data, _opts, ctx) {
   }
 
   let html = '';
-  servers.forEach((s, i) => {
+  servers.forEach(s => {
     html += '<div class="vllm-server">';
     if (!s.ok) {
       html += '<div class="vllm-head"><span class="net-state down">DOWN</span><span class="vllm-ep">' +
@@ -352,12 +352,19 @@ function updateVLLM(F, data, _opts, ctx) {
       (active ? 'SERVING' : 'IDLE') + '</span><span class="vllm-model" title="' + esc(s.endpoint) + '">' +
       esc(s.model || s.endpoint) + '</span>' + (s.node ? '<span class="vllm-node">on ' + esc(s.node) + '</span>' : '') + '</div>';
 
-    const hkey = 'vllm' + (s.node || '') + i;
-    const hist = ctx.history[hkey] || (ctx.history[hkey] = []);
-    hist.push(m.decode_tps || 0);
-    if (hist.length > SPARK_POINTS) hist.shift();
+    // History per server, keyed by node and endpoint so a node dropping out
+    // of the merged list does not shift another server onto its history.
+    const hkey = 'vllm|' + (s.node || '') + '|' + s.endpoint;
+    const hist = ctx.history[hkey] || (ctx.history[hkey] = { at: null, points: [] });
+    // One point per probe sample, not per browser tick: a stale repeat of
+    // the same sample (or an older node without sample_at) is not a point.
+    if (s.sample_at == null ? !s.stale : s.sample_at !== hist.at) {
+      hist.at = s.sample_at == null ? null : s.sample_at;
+      hist.points.push(m.decode_tps || 0);
+      if (hist.points.length > SPARK_POINTS) hist.points.shift();
+    }
     if (want.sparkline && want.metrics.includes('decode_tps')) {
-      html += '<div class="spark-wrap">' + sparkline(hist) + '</div>';
+      html += '<div class="spark-wrap">' + sparkline(hist.points) + '</div>';
     }
 
     if (want.metrics.includes('kv_cache')) {

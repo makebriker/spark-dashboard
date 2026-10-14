@@ -298,6 +298,9 @@ class _Endpoint:
         out.update(
             ok=True,
             model=labels.get("model_name") or (model or {}).get("id"),
+            # Identifies this sample: the board pushes one sparkline point per
+            # new value, not per browser tick.
+            sample_at=round(time.time(), 1),
             window_s=round(dt, 1),
             metrics={
                 "decode_tps": rate("gen_tokens"),
