@@ -40,6 +40,14 @@ function fmtRate(bps) {
   return (bps || 0).toFixed(0) + ' B/s';
 }
 
+// GB10 GPU: NVML reports slowdown around 85-90 °C, so colour well before.
+function tempClass(c) {
+  if (c >= 85) return 'red';
+  if (c >= 75) return 'orange';
+  if (c >= 65) return 'yellow';
+  return 'green';
+}
+
 function throttleClass(status) {
   return { PASS: 'green', IDLE: 'dim', LOCKED: 'orange', THROTTLED: 'red' }[status] || 'dim';
 }
@@ -119,7 +127,7 @@ const CARDS = {
     title: 'GPU',
     build: () =>
       metricRow('Utilization', 'util') + metricRow('Memory', 'mem') +
-      '<div class="stats-row"><span data-f="temp" class="stat"></span>' +
+      '<div class="stats-row"><span data-f="temp" class="stat stat-hero"></span>' +
       '<span data-f="power" class="stat"></span><span data-f="uma" class="stat badge"></span></div>' +
       '<div data-f="procs" class="proc-table"></div>',
     update(F, data, opts) {
@@ -131,7 +139,11 @@ const CARDS = {
       const memPct = g.mem_total ? (g.mem_used || 0) / g.mem_total * 100 : 0;
       F.bar('mem-bar', memPct);
       F.text('mem-text', fmt(g.mem_used) + ' / ' + fmt(g.mem_total));
-      F.text('temp', g.temperature != null ? g.temperature.toFixed(0) + '°C' : '—');
+      const tempEl = F.el('temp');
+      if (tempEl) {
+        tempEl.textContent = g.temperature != null ? g.temperature.toFixed(0) + '°C' : '—';
+        tempEl.className = 'stat stat-hero ' + (g.temperature != null ? tempClass(g.temperature) : '');
+      }
       F.text('power', g.power != null ? (g.power / 1000).toFixed(1) + 'W' : '—');
       if (g.is_uma) {
         const psi = data.pressure && data.pressure.mem ? data.pressure.mem.level : 'LOW';

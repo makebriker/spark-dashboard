@@ -217,6 +217,18 @@ header {
   color: var(--text);
 }
 
+/* The one number worth reading from across the room: GPU temperature. */
+.stat.stat-hero {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  line-height: 1;
+}
+.stat-hero.green { color: var(--green); }
+.stat-hero.yellow { color: var(--yellow); }
+.stat-hero.orange { color: var(--orange); }
+.stat-hero.red { color: var(--red); }
+
 .stat.badge {
   padding: 2px 8px;
   border-radius: 4px;
