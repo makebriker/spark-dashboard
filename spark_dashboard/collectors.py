@@ -155,8 +155,17 @@ def average_net_rates(entries: list[dict]) -> None:
         while hist and span - hist[0][1] >= NET_AVG_WINDOW_S:
             span -= hist.popleft()[1]
         if span > 0:
-            e["rx_rate"] = sum(h[1] * h[2] for h in hist) / span
-            e["tx_rate"] = sum(h[1] * h[3] for h in hist) / span
+            # Count only the part of the oldest sample that falls inside the
+            # window (its rate is uniform over its interval), so the window
+            # is exactly NET_AVG_WINDOW_S once warm. Consecutive 15 s poller
+            # rows then tile time instead of overlapping, and a burst in the
+            # overlap is not counted twice (measured +36% before this).
+            excess = max(0.0, span - NET_AVG_WINDOW_S)
+            weights = [h[1] for h in hist]
+            weights[0] -= excess
+            span -= excess
+            e["rx_rate"] = sum(w * h[2] for w, h in zip(weights, hist)) / span
+            e["tx_rate"] = sum(w * h[3] for w, h in zip(weights, hist)) / span
         e["rate_window_s"] = round(span, 1)
     for gone in _net_hist.keys() - seen:
         del _net_hist[gone]
