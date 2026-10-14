@@ -26,6 +26,7 @@ stdlib only — urllib, no prometheus_client, no requests.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 import time
@@ -33,6 +34,8 @@ import urllib.request
 from collections import deque
 
 import psutil
+
+log = logging.getLogger("spark_dashboard.vllm")
 
 DETECT_TTL_S = 30.0
 MODELS_TTL_S = 60.0
@@ -194,6 +197,7 @@ class _Endpoint:
         self.model: dict | None = None
         self.model_at = 0.0
         self.last_ok: tuple[float, dict] | None = None
+        self.last_error: str | None = None
 
     def _models(self) -> dict | None:
         """/v1/models, cached. 401 under --api-key is fine: the model name
@@ -222,12 +226,20 @@ class _Endpoint:
             raw, labels = parse_prometheus(_http_get(self.url + "/metrics").decode())
         except Exception as err:
             out["error"] = f"{type(err).__name__}: {err}"
+            # One line per distinct failure, and one on recovery, so a DOWN
+            # on the board can be matched to its cause in the journal.
+            if out["error"] != self.last_error:
+                self.last_error = out["error"]
+                log.warning("%s/metrics scrape failed: %s", self.url, out["error"])
             # Keep the window: a timeout is not a restart, and counter resets
             # are detected below when the server answers again.
             if self.last_ok and time.monotonic() - self.last_ok[0] < STALE_MAX_S:
                 return {**self.last_ok[1], "stale": True, "error": out["error"]}
             return out
         now = time.monotonic()
+        if self.last_error:
+            log.warning("%s/metrics scrape recovered", self.url)
+            self.last_error = None
 
         cur: dict[str, float] = {}
         for key, names in _COUNTERS.items():
