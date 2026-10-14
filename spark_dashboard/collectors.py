@@ -17,6 +17,9 @@ from sparkview.layers.memory import get_memory
 from sparkview.layers.power import get_power_info
 from sparkview.layers.pressure import get_pressure
 
+from spark_dashboard.config import get_config
+from spark_dashboard.vllm_probe import get_vllm_info
+
 # Wraps sparkview.layers.network — adds onboard ethernet, WiFi and IPv4
 from spark_dashboard.net_extra import get_net_info_all
 
@@ -138,6 +141,7 @@ def get_metrics() -> dict:
     rails = dataclasses.asdict(rails_data) if rails_data else None
 
     disk = _safe_call(get_disk_info, default=[])
+    vllm = _safe_call(get_vllm_info, get_config()["vllm"], default={"detected": False, "servers": []})
 
     # Convert cpu_freq namedtuple to dict if present
     cpu_freq = cpu.get("freq")
@@ -168,4 +172,5 @@ def get_metrics() -> dict:
         "network": net,
         "info": info,
         "disk": disk,
+        "vllm": vllm,
     }

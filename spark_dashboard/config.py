@@ -1,0 +1,161 @@
+"""Board configuration — a TOML file, re-read whenever it changes on disk.
+
+Lookup order (first that exists wins):
+
+1. ``$SPARK_DASHBOARD_CONFIG``
+2. ``config.toml`` in the working directory (the repo checkout under systemd)
+3. ``~/.config/spark-dashboard/config.toml``
+
+With no file at all the board behaves like v1: one local node, every card, and
+the vLLM card shown only when a server is detected. ``config.toml`` is
+gitignored, so ``deploy.sh``'s hard reset never touches it; start from
+``config.example.toml``.
+"""
+
+from __future__ import annotations
+
+import copy
+import logging
+import os
+import threading
+import tomllib
+from pathlib import Path
+
+log = logging.getLogger("spark_dashboard.config")
+
+MAX_NODES = 4
+
+CARDS = ("vllm", "gpu", "memory", "cpu", "clock", "network", "disk")
+
+VLLM_METRICS = (
+    "decode_tps",     # aggregate generation throughput, tok/s
+    "stream_tps",     # per-request decode speed, 1 / inter-token latency
+    "prefill_tps",    # prompt tokens processed, tok/s
+    "running",        # requests currently decoding
+    "waiting",        # requests queued
+    "kv_cache",       # KV cache utilisation, %
+    "ttft",           # mean time to first token over the window
+    "itl",            # mean inter-token latency (TPOT) over the window
+    "e2e",            # mean end-to-end request latency over the window
+    "req_rate",       # completed requests / s
+    "prefix_hit",     # prefix-cache hit rate over the window
+    "spec_accept",    # speculative-decoding acceptance rate over the window
+    "preemptions",    # preemptions over the window
+    "max_model_len",  # served context length
+)
+
+DEFAULTS: dict = {
+    "board": {
+        "title": "SPARKVIEW",
+        "refresh_ms": 2000,
+        # "columns": one column per node, cards stacked inside it.
+        # "rows": one horizontal band per node, cards side by side.
+        "layout": "columns",
+        "cards": list(CARDS),
+    },
+    "cards": {
+        "gpu": {"processes": 5},
+        "cpu": {"per_core": True},
+        "memory": {"psi": True, "swap": True},
+        "network": {"include": [], "exclude": [], "hide_down": False},
+        "disk": {"include": [], "exclude": []},
+    },
+    "vllm": {
+        # "auto": scan for a running vLLM server; true: same, but keep the card
+        # visible (as "not detected") when none is found; false: never probe.
+        "enabled": "auto",
+        # Explicit base URLs, e.g. ["http://127.0.0.1:8000"]. Empty = detect
+        # from the process table (`vllm serve ... --port N`).
+        "endpoints": [],
+        "metrics": [
+            "decode_tps", "stream_tps", "prefill_tps", "running", "waiting",
+            "kv_cache", "ttft", "itl", "prefix_hit",
+        ],
+        "rate_window_s": 10,
+        "sparkline": True,
+    },
+    # Each node: name + url. "local" is collected in-process; anything else is
+    # fetched from that node's own dashboard at <url>/api/metrics.
+    "nodes": [{"name": "", "url": "local"}],
+}
+
+
+def _merge(base: dict, override: dict) -> dict:
+    out = copy.deepcopy(base)
+    for key, val in override.items():
+        if isinstance(val, dict) and isinstance(out.get(key), dict):
+            out[key] = _merge(out[key], val)
+        else:
+            out[key] = val
+    return out
+
+
+def _validate(cfg: dict) -> dict:
+    board = cfg["board"]
+    unknown = [c for c in board["cards"] if c not in CARDS]
+    if unknown:
+        log.warning("unknown cards ignored: %s (known: %s)", unknown, ", ".join(CARDS))
+    board["cards"] = [c for c in board["cards"] if c in CARDS]
+    if board["layout"] not in ("columns", "rows"):
+        log.warning("board.layout must be 'columns' or 'rows', got %r", board["layout"])
+        board["layout"] = "columns"
+    board["refresh_ms"] = max(500, int(board["refresh_ms"]))
+
+    vllm = cfg["vllm"]
+    unknown = [m for m in vllm["metrics"] if m not in VLLM_METRICS]
+    if unknown:
+        log.warning("unknown vllm.metrics ignored: %s", unknown)
+    vllm["metrics"] = [m for m in vllm["metrics"] if m in VLLM_METRICS]
+    if vllm["enabled"] not in ("auto", True, False):
+        log.warning("vllm.enabled must be \"auto\", true or false, got %r", vllm["enabled"])
+        vllm["enabled"] = "auto"
+    vllm["rate_window_s"] = max(2, float(vllm["rate_window_s"]))
+
+    nodes = [n for n in cfg["nodes"] if isinstance(n, dict) and n.get("url")]
+    if len(nodes) > MAX_NODES:
+        log.warning("%d nodes configured; only the first %d are shown", len(nodes), MAX_NODES)
+        nodes = nodes[:MAX_NODES]
+    for n in nodes:
+        n["url"] = n["url"].rstrip("/")
+        n.setdefault("name", "")
+        if "cards" in n:
+            n["cards"] = [c for c in n["cards"] if c in CARDS]
+    cfg["nodes"] = nodes or copy.deepcopy(DEFAULTS["nodes"])
+    return cfg
+
+
+def config_path() -> Path | None:
+    candidates = []
+    if os.environ.get("SPARK_DASHBOARD_CONFIG"):
+        candidates.append(Path(os.environ["SPARK_DASHBOARD_CONFIG"]))
+    candidates += [Path("config.toml"), Path.home() / ".config/spark-dashboard/config.toml"]
+    return next((p for p in candidates if p.is_file()), None)
+
+
+_lock = threading.Lock()
+_cache: tuple[Path | None, float, dict] | None = None
+
+
+def get_config() -> dict:
+    """Current config. Cheap: one stat() per call, re-parses only on change.
+
+    A file that fails to parse keeps the last good config rather than falling
+    back to defaults, so a typo mid-edit doesn't flip the board around.
+    """
+    global _cache
+    path = config_path()
+    mtime = path.stat().st_mtime if path else 0.0
+    with _lock:
+        if _cache and _cache[0] == path and _cache[1] == mtime:
+            return _cache[2]
+        try:
+            raw = tomllib.loads(path.read_text()) if path else {}
+            cfg = _validate(_merge(DEFAULTS, raw))
+        except (OSError, tomllib.TOMLDecodeError, TypeError, ValueError) as err:
+            log.error("config %s unusable, keeping previous: %s", path, err)
+            cfg = _cache[2] if _cache else _validate(copy.deepcopy(DEFAULTS))
+        else:
+            if path:
+                log.info("loaded config from %s", path)
+        _cache = (path, mtime, cfg)
+        return cfg
