@@ -486,6 +486,7 @@ function renderBoard(payload) {
     board.style.setProperty('--n', payload.nodes.length);
     refreshMs = cfg.board.refresh_ms;
     setTitle(cfg.board.title);
+    applyTheme(cfg.board.theme);
   }
 
   payload.nodes.forEach((node, i) => renderNode(nodeState.get(i + '|' + node.url), node, cfg));
@@ -517,6 +518,34 @@ function renderInference(payload, cfg) {
     console.error('SparkView: inference band failed to render', err);
   }
 }
+
+/* ---------- theme ----------
+ * The picker in the header wins and is remembered in this browser; otherwise
+ * the board's config decides. The attribute on <html> selects a token block
+ * in style.css. */
+
+const THEME_KEY = 'sparkview-theme';
+const themePick = document.getElementById('theme-pick');
+const THEMES = Array.from(themePick.options, o => o.value);
+
+function storedTheme() {
+  try { return localStorage.getItem(THEME_KEY); } catch (e) { return null; }
+}
+
+function applyTheme(configured) {
+  const stored = storedTheme();
+  const name = THEMES.includes(stored) ? stored : THEMES.includes(configured) ? configured : 'classic';
+  document.documentElement.dataset.theme = name;
+  themePick.value = name;
+}
+
+themePick.addEventListener('change', () => {
+  try { localStorage.setItem(THEME_KEY, themePick.value); } catch (e) { /* private window */ }
+  applyTheme(themePick.value);
+});
+
+// Paint the remembered theme before the first poll answers.
+applyTheme();
 
 function setTitle(title) {
   const t = (title || 'SPARKVIEW').trim();

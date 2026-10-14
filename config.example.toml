@@ -12,6 +12,9 @@ refresh_ms = 2000
 # "columns": one column per node, its cards stacked inside.
 # "rows":    one horizontal band per node, its cards side by side.
 layout = "columns"
+# Default look. The picker in the page header overrides it per browser.
+# Known: classic, refined, quiet, terminal, light, wall
+theme = "classic"
 # Which cards to show, in this order. Drop a name to hide that card.
 # Known: vllm, gpu, memory, cpu, clock, network, disk
 cards = ["vllm", "gpu", "memory", "cpu", "clock", "network", "disk"]

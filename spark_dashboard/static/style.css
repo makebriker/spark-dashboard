@@ -1,10 +1,21 @@
-/* SparkView Dashboard — NVIDIA-inspired dark theme */
+/* SparkView Dashboard
+ *
+ * Every colour, font and radius is a token on :root. A theme is a block of
+ * [data-theme="…"] overrides at the bottom of this file; the picker in the
+ * header sets that attribute on <html>. Rules in between use tokens only, so
+ * a new theme is a token block plus the few structural rules it needs. */
 :root {
   --bg: #0a0a0a;
   --card-bg: #141414;
   --card-border: #1f1f1f;
+  --sep: #1a1a1a;                 /* dividers inside a card */
+  --track: #222;                  /* empty part of a bar */
+  --track-strong: #333;           /* core bars, "dim" fill */
+  --tile-bg: #1a1a1a;
+  --header-bg: linear-gradient(135deg, #0f0f0f 0%, #1a1a0e 100%);
   --accent: #76b900;
   --accent-dim: #4a7a00;
+  --title: var(--accent);         /* card titles */
   --text: #e0e0e0;
   --text-dim: #888;
   --red: #f44336;
@@ -12,9 +23,24 @@
   --yellow: #ffc107;
   --green: #76b900;
   --blue: #2196f3;
+  /* bar fills: a gradient in the classic theme, flat colour elsewhere */
+  --bar-green: linear-gradient(90deg, var(--accent-dim), var(--accent));
+  --bar-yellow: linear-gradient(90deg, #e6a800, var(--yellow));
+  --bar-orange: linear-gradient(90deg, #e65100, var(--orange));
+  --bar-red: linear-gradient(90deg, #c62828, var(--red));
+  --bar-blue: linear-gradient(90deg, #1565c0, var(--blue));
+  --rail: linear-gradient(90deg, var(--accent), transparent);   /* 2 px line on top of a card */
+  --rail-h: 2px;
+  --bar-h: 8px;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, sans-serif;
+  --body-font: var(--sans);
   --radius: 8px;
+  --radius-sm: 4px;
+  --hero-size: 22px;
+  --spark-h: 36px;
+  --glow: 0 0 6px;
+  color-scheme: dark;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -22,7 +48,7 @@
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: var(--sans);
+  font-family: var(--body-font);
   font-size: 14px;
   min-height: 100vh;
 }
@@ -33,7 +59,7 @@ header {
   align-items: center;
   justify-content: space-between;
   padding: 12px 24px;
-  background: linear-gradient(135deg, #0f0f0f 0%, #1a1a0e 100%);
+  background: var(--header-bg);
   border-bottom: 1px solid var(--card-border);
 }
 
@@ -55,6 +81,19 @@ header {
   font-family: var(--mono);
 }
 
+/* Theme picker: a plain select styled like a badge, labelled by its title */
+.theme-pick {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  padding: 3px 6px;
+  cursor: pointer;
+}
+.theme-pick:hover, .theme-pick:focus-visible { color: var(--text); border-color: var(--text-dim); outline: none; }
+
 .conn-dot {
   width: 10px;
   height: 10px;
@@ -63,8 +102,8 @@ header {
   margin-left: 8px;
 }
 
-.conn-dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
-.conn-dot.disconnected { background: var(--red); box-shadow: 0 0 6px var(--red); }
+.conn-dot.connected { background: var(--green); box-shadow: var(--glow) var(--green); }
+.conn-dot.disconnected { background: var(--red); box-shadow: var(--glow) var(--red); }
 
 /* Board: one or more nodes, each with its own grid of cards */
 .board {
@@ -114,8 +153,8 @@ header {
   align-self: center;
   background: var(--text-dim);
 }
-.node-dot.ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
-.node-dot.bad { background: var(--red); box-shadow: 0 0 6px var(--red); }
+.node-dot.ok { background: var(--green); box-shadow: var(--glow) var(--green); }
+.node-dot.bad { background: var(--red); box-shadow: var(--glow) var(--red); }
 
 .node-name {
   font-family: var(--mono);
@@ -145,8 +184,8 @@ header {
   content: '';
   position: absolute;
   top: 0; left: 0; right: 0;
-  height: 2px;
-  background: linear-gradient(90deg, var(--accent), transparent);
+  height: var(--rail-h);
+  background: var(--rail);
   border-radius: var(--radius) var(--radius) 0 0;
 }
 
@@ -154,7 +193,7 @@ header {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 2px;
-  color: var(--accent);
+  color: var(--title);
   margin-bottom: 12px;
   text-transform: uppercase;
 }
@@ -176,30 +215,32 @@ header {
 
 .bar-track {
   width: 100%;
-  height: 8px;
-  background: #222;
-  border-radius: 4px;
+  height: var(--bar-h);
+  background: var(--track);
+  border-radius: calc(var(--bar-h) / 2);
   overflow: hidden;
+  position: relative;
 }
 
 .bar-fill {
   height: 100%;
-  border-radius: 4px;
+  border-radius: calc(var(--bar-h) / 2);
   transition: width 0.5s ease, background 0.5s ease;
   min-width: 1px;
 }
 
-.bar-fill.green { background: linear-gradient(90deg, var(--accent-dim), var(--accent)); }
-.bar-fill.yellow { background: linear-gradient(90deg, #e6a800, var(--yellow)); }
-.bar-fill.orange { background: linear-gradient(90deg, #e65100, var(--orange)); }
-.bar-fill.red { background: linear-gradient(90deg, #c62828, var(--red)); }
-.bar-fill.blue { background: linear-gradient(90deg, #1565c0, var(--blue)); }
-.bar-fill.dim { background: #333; }
+.bar-fill.green { background: var(--bar-green); }
+.bar-fill.yellow { background: var(--bar-yellow); }
+.bar-fill.orange { background: var(--bar-orange); }
+.bar-fill.red { background: var(--bar-red); }
+.bar-fill.blue { background: var(--bar-blue); }
+.bar-fill.dim { background: var(--track-strong); }
 
 .value {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Stats row */
@@ -215,11 +256,12 @@ header {
   font-size: 13px;
   font-family: var(--mono);
   color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 
 /* The one number worth reading from across the room: GPU temperature. */
 .stat.stat-hero {
-  font-size: 22px;
+  font-size: var(--hero-size);
   font-weight: 800;
   letter-spacing: -0.5px;
   line-height: 1;
@@ -231,17 +273,19 @@ header {
 
 .stat.badge {
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-weight: 700;
   font-size: 11px;
   letter-spacing: 1px;
 }
 
-.badge-green { background: #1b3d00; color: var(--green); }
-.badge-yellow { background: #3d3000; color: var(--yellow); }
-.badge-orange { background: #3d1f00; color: var(--orange); }
-.badge-red { background: #3d0000; color: var(--red); }
-.badge-dim { background: #222; color: var(--text-dim); }
+/* Badge backgrounds are the status colour at low opacity, so they follow
+ * every theme's palette without a second set of tokens. */
+.badge-green { background: color-mix(in srgb, var(--green) 22%, transparent); color: var(--green); }
+.badge-yellow { background: color-mix(in srgb, var(--yellow) 22%, transparent); color: var(--yellow); }
+.badge-orange { background: color-mix(in srgb, var(--orange) 22%, transparent); color: var(--orange); }
+.badge-red { background: color-mix(in srgb, var(--red) 22%, transparent); color: var(--red); }
+.badge-dim { background: var(--track); color: var(--text-dim); }
 
 /* Process table */
 .proc-table {
@@ -257,7 +301,7 @@ header {
   padding: 2px 0;
 }
 
-.proc-row.header { color: var(--accent); font-weight: 600; }
+.proc-row.header { color: var(--title); font-weight: 600; }
 
 .proc-pid { width: 50px; }
 .proc-user { width: 70px; }
@@ -276,7 +320,7 @@ header {
 .core-bar {
   height: 4px;
   border-radius: 2px;
-  background: #333;
+  background: var(--track-strong);
   overflow: hidden;
 }
 
@@ -297,7 +341,7 @@ header {
 /* Network */
 .net-iface {
   padding: 6px 0;
-  border-bottom: 1px solid #1a1a1a;
+  border-bottom: 1px solid var(--sep);
 }
 
 .net-iface:last-child { border-bottom: none; }
@@ -324,8 +368,8 @@ header {
   letter-spacing: 1px;
 }
 
-.net-state.up { background: #1b3d00; color: var(--green); }
-.net-state.down { background: #3d0000; color: var(--red); }
+.net-state.up { background: color-mix(in srgb, var(--green) 22%, transparent); color: var(--green); }
+.net-state.down { background: color-mix(in srgb, var(--red) 22%, transparent); color: var(--red); }
 
 .net-speed {
   font-size: 11px;
@@ -384,7 +428,7 @@ header {
 
 .vllm-node { font-family: var(--mono); font-size: 11px; color: var(--text-dim); white-space: nowrap; }
 
-.vllm-server + .vllm-server { margin-top: 14px; padding-top: 12px; border-top: 1px solid #1a1a1a; }
+.vllm-server + .vllm-server { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--sep); }
 
 .vllm-head {
   display: flex;
@@ -403,10 +447,10 @@ header {
   white-space: nowrap;
 }
 
-.net-state.idle { background: #222; color: var(--text-dim); }
+.net-state.idle { background: var(--track); color: var(--text-dim); }
 
 .spark-wrap { position: relative; margin-bottom: 8px; }
-.spark { display: block; width: 100%; height: 36px; }
+.spark { display: block; width: 100%; height: var(--spark-h); }
 .spark-line { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .spark-fill { fill: var(--accent); opacity: 0.12; }
 .spark-max {
@@ -422,7 +466,7 @@ header {
 }
 
 .tile {
-  background: #1a1a1a;
+  background: var(--tile-bg);
   border-radius: 6px;
   padding: 6px 8px;
   display: flex;
@@ -442,6 +486,7 @@ header {
   font-family: var(--mono);
   font-size: 15px;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .tile-value small { font-size: 10px; color: var(--text-dim); }
@@ -472,3 +517,142 @@ footer {
 
 /* Hidden */
 .hidden { display: none !important; }
+
+/* =========================================================================
+ * Themes. "classic" is the :root block above. Each theme below redefines
+ * tokens and adds only the structural rules its look needs.
+ * ========================================================================= */
+
+/* Refined: the classic palette with the decoration taken out. */
+[data-theme="refined"] {
+  --bg: #0b0c0a; --card-bg: #121410; --card-border: #1f2219; --sep: #1a1d16;
+  --track: #1d1f19; --track-strong: #2a2d25; --tile-bg: #181a15;
+  --header-bg: var(--bg);
+  --text: #e6e7e2; --text-dim: #8a8d84;
+  --red: #f85149; --orange: #f0883e; --yellow: #e3b341;
+  --bar-green: var(--green); --bar-yellow: var(--yellow); --bar-orange: var(--orange);
+  --bar-red: var(--red); --bar-blue: var(--blue);
+  --rail-h: 0; --bar-h: 6px; --radius: 10px; --hero-size: 24px; --glow: 0 0 4px;
+}
+
+/* Quiet: near-black, structure from translucent white, colour only for state. */
+[data-theme="quiet"] {
+  --bg: #0a0b0d; --card-bg: rgba(255, 255, 255, 0.03); --card-border: rgba(255, 255, 255, 0.07);
+  --sep: rgba(255, 255, 255, 0.06); --track: rgba(255, 255, 255, 0.06); --track-strong: rgba(255, 255, 255, 0.12);
+  --tile-bg: transparent; --header-bg: var(--bg);
+  --accent: #ededef; --title: #8b8d93;
+  --text: #ededef; --text-dim: #8b8d93;
+  --green: #4ade80; --yellow: #fbbf24; --orange: #fb923c; --red: #f87171; --blue: #60a5fa;
+  --bar-green: rgba(255, 255, 255, 0.55); --bar-yellow: var(--yellow); --bar-orange: var(--orange);
+  --bar-red: var(--red); --bar-blue: var(--blue);
+  --rail-h: 0; --bar-h: 4px; --radius: 8px; --hero-size: 26px; --glow: 0 0 0;
+}
+[data-theme="quiet"] .card-title { font-weight: 500; letter-spacing: 0; text-transform: none; font-size: 12px; }
+[data-theme="quiet"] .logo { letter-spacing: 1px; font-weight: 700; }
+[data-theme="quiet"] .logo-accent { color: var(--text-dim); }
+[data-theme="quiet"] .stat-hero.green { color: var(--text); }
+[data-theme="quiet"] .tile-hero .tile-value { font-size: 20px; }
+[data-theme="quiet"] .tile-value { font-family: var(--sans); font-weight: 600; letter-spacing: -0.02em; }
+[data-theme="quiet"] .tiles { gap: 10px; }
+[data-theme="quiet"] .tile { padding: 0; }
+[data-theme="quiet"] .badge-green { background: transparent; border: 1px solid var(--card-border); color: var(--text-dim); }
+[data-theme="quiet"] .net-state.up { background: transparent; border: 1px solid var(--card-border); color: var(--text-dim); }
+[data-theme="quiet"] .node-name { font-family: var(--sans); letter-spacing: 0; }
+[data-theme="quiet"] .node-head { border-bottom: none; }
+
+/* Terminal: one monospace face, square corners, titles cut into the box border,
+ * bars drawn as 24 cells. */
+[data-theme="terminal"] {
+  --bg: #050607; --card-bg: #050607; --card-border: #30363d; --sep: #21262d;
+  --track: #161b22; --track-strong: #21262d; --tile-bg: transparent;
+  --header-bg: var(--bg);
+  --accent: #39c5cf; --accent-dim: #1f7a80; --title: var(--accent);
+  --text: #d7dde4; --text-dim: #7d8590;
+  --green: #3fb950; --yellow: #d29922; --orange: #f0883e; --red: #f85149; --blue: #58a6ff;
+  --bar-green: var(--green); --bar-yellow: var(--yellow); --bar-orange: var(--orange);
+  --bar-red: var(--red); --bar-blue: var(--blue);
+  --body-font: var(--mono);
+  --rail-h: 0; --bar-h: 10px; --radius: 0; --radius-sm: 0; --hero-size: 22px; --glow: 0 0 0;
+}
+[data-theme="terminal"] body { font-size: 12px; }
+[data-theme="terminal"] .card { padding: 16px 12px 10px; margin-top: 6px; }
+[data-theme="terminal"] .card-title {
+  position: absolute; top: -8px; left: 10px;
+  background: var(--bg); padding: 0 6px; margin: 0;
+  letter-spacing: 0; text-transform: lowercase;
+}
+[data-theme="terminal"] .node-grid { gap: 14px; }
+[data-theme="terminal"] .bar-track, [data-theme="terminal"] .bar-fill, [data-theme="terminal"] .core-bar { border-radius: 0; }
+/* The cells: gaps in the page colour painted over the whole track. */
+[data-theme="terminal"] .bar-track::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(90deg, transparent 0 calc(100% / 24 - 2px), var(--bg) 0 calc(100% / 24));
+}
+[data-theme="terminal"] .stat.badge, [data-theme="terminal"] .net-state { color: var(--bg); letter-spacing: 0; }
+[data-theme="terminal"] .badge-green, [data-theme="terminal"] .net-state.up { background: var(--green); }
+[data-theme="terminal"] .badge-yellow { background: var(--yellow); }
+[data-theme="terminal"] .badge-orange { background: var(--orange); }
+[data-theme="terminal"] .badge-red, [data-theme="terminal"] .net-state.down { background: var(--red); }
+[data-theme="terminal"] .badge-dim, [data-theme="terminal"] .net-state.idle { background: var(--card-border); color: var(--text); }
+[data-theme="terminal"] .node-name { color: var(--accent); }
+[data-theme="terminal"] .node-name::before { content: '┌─ '; color: var(--card-border); }
+[data-theme="terminal"] .node-head { border-bottom: none; padding-bottom: 0; margin-bottom: 4px; }
+[data-theme="terminal"] .tile { padding: 2px 0; }
+[data-theme="terminal"] .logo { letter-spacing: 1px; }
+[data-theme="terminal"] .logo::before { content: '> '; color: var(--accent); }
+[data-theme="terminal"] .logo-accent { color: var(--accent); }
+
+/* Light: the quiet theme on an off-white ground, for a desk in daylight. */
+[data-theme="light"] {
+  --bg: #fafafa; --card-bg: #ffffff; --card-border: #e5e5e5; --sep: #eeeeee;
+  --track: #eeeeee; --track-strong: #dddddd; --tile-bg: transparent;
+  --header-bg: #ffffff;
+  --accent: #0070f3; --accent-dim: #0057b8; --title: #666666;
+  --text: #171717; --text-dim: #666666;
+  --green: #17803d; --yellow: #b45309; --orange: #c2410c; --red: #dc2626; --blue: #0070f3;
+  --bar-green: #171717; --bar-yellow: var(--yellow); --bar-orange: var(--orange);
+  --bar-red: var(--red); --bar-blue: var(--blue);
+  --rail-h: 0; --bar-h: 6px; --radius: 8px; --hero-size: 26px; --glow: 0 0 0;
+  color-scheme: light;
+}
+[data-theme="light"] .card { border: none; box-shadow: 0 0 0 1px var(--card-border), 0 1px 2px rgba(0, 0, 0, 0.04); }
+[data-theme="light"] .card-title { font-weight: 500; letter-spacing: 0; text-transform: none; font-size: 12px; }
+[data-theme="light"] .logo-accent { color: var(--accent); }
+[data-theme="light"] .stat-hero.green { color: var(--text); }
+[data-theme="light"] .tile-hero .tile-value { font-size: 20px; color: var(--text); }
+[data-theme="light"] .tile-value { font-family: var(--sans); font-weight: 600; letter-spacing: -0.02em; }
+[data-theme="light"] .tiles { gap: 10px; }
+[data-theme="light"] .tile { padding: 0; }
+[data-theme="light"] .spark-fill { opacity: 0.08; }
+[data-theme="light"] .node.stale .node-grid { opacity: 0.5; }
+[data-theme="light"] .node-name { font-family: var(--sans); letter-spacing: 0; }
+[data-theme="light"] .node-head { border-bottom: none; }
+
+/* Wall: for the TV. Big figures, saturated state colours, taller sparkline. */
+[data-theme="wall"] {
+  --bg: #07090c; --card-bg: #0e1217; --card-border: #1a2029; --sep: #1a2029;
+  --track: #1c232d; --track-strong: #26303c; --tile-bg: #121820;
+  --header-bg: var(--bg);
+  --accent: #5cc8ff; --accent-dim: #2a7fb0; --title: #55606f;
+  --text: #e9edf2; --text-dim: #8a94a3;
+  --green: #2fd27a; --yellow: #ffc93c; --orange: #ff8a3d; --red: #ff4d4f; --blue: #5cc8ff;
+  --bar-green: var(--green); --bar-yellow: var(--yellow); --bar-orange: var(--orange);
+  --bar-red: var(--red); --bar-blue: var(--blue);
+  --rail-h: 0; --bar-h: 8px; --radius: 14px; --radius-sm: 6px; --hero-size: 40px; --spark-h: 56px; --glow: 0 0 12px;
+}
+[data-theme="wall"] body { font-size: 15px; }
+[data-theme="wall"] .card { padding: 18px; }
+[data-theme="wall"] .card-title { letter-spacing: 2.5px; font-weight: 600; }
+[data-theme="wall"] .node-name { font-family: var(--sans); font-size: 24px; letter-spacing: -0.02em; }
+[data-theme="wall"] .node-dot { width: 12px; height: 12px; }
+[data-theme="wall"] .stat { font-size: 15px; }
+[data-theme="wall"] .label { font-size: 13px; }
+[data-theme="wall"] .value { font-size: 12px; }
+[data-theme="wall"] .spark-line { stroke-width: 2; }
+[data-theme="wall"] .spark-fill { opacity: 0.14; }
+[data-theme="wall"] .tiles { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; }
+[data-theme="wall"] .tile { padding: 8px 10px; border-radius: 10px; }
+[data-theme="wall"] .tile-value { font-size: 20px; font-weight: 600; }
+[data-theme="wall"] .tile-hero { grid-column: span 2; }
+[data-theme="wall"] .tile-hero .tile-value { font-size: 40px; line-height: 1; letter-spacing: -0.02em; }
+[data-theme="wall"] .logo-accent { color: var(--accent); }

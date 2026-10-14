@@ -67,3 +67,19 @@ def test_reload_on_change_and_keep_previous_on_bad_file(tmp_path, monkeypatch):
     path.write_text('[board]\ncards = "gpu"\n')  # not a parse error: a type error
     os.utime(path, (1, 4))
     assert config.get_config()["board"]["title"] == "TWO"
+
+
+def test_theme_defaults_to_classic_and_unknown_names_fall_back():
+    assert _cfg({})["board"]["theme"] == "classic"
+    assert _cfg({"board": {"theme": "wall"}})["board"]["theme"] == "wall"
+    assert _cfg({"board": {"theme": "neon"}})["board"]["theme"] == "classic"
+
+
+def test_theme_names_match_the_header_picker():
+    from pathlib import Path
+    import re
+    html = (Path(config.__file__).parent / "static/index.html").read_text()
+    css = (Path(config.__file__).parent / "static/style.css").read_text()
+    assert re.findall(r'<option value="(\w+)"', html) == list(config.THEMES)
+    for name in config.THEMES[1:]:
+        assert f'[data-theme="{name}"]' in css

@@ -45,6 +45,9 @@ VLLM_METRICS = (
     "max_model_len",  # served context length
 )
 
+# Token blocks in static/style.css; also the options of the header picker.
+THEMES = ("classic", "refined", "quiet", "terminal", "light", "wall")
+
 DEFAULTS: dict = {
     "board": {
         "title": "SPARKVIEW",
@@ -52,6 +55,8 @@ DEFAULTS: dict = {
         # "columns": one column per node, cards stacked inside it.
         # "rows": one horizontal band per node, cards side by side.
         "layout": "columns",
+        # Default look; the picker in the header overrides it per browser.
+        "theme": "classic",
         "cards": list(CARDS),
     },
     "cards": {
@@ -108,6 +113,9 @@ def _validate(cfg: dict) -> dict:
     if board["layout"] not in ("columns", "rows"):
         log.warning("board.layout must be 'columns' or 'rows', got %r", board["layout"])
         board["layout"] = "columns"
+    if board["theme"] not in THEMES:
+        log.warning("board.theme must be one of %s, got %r", ", ".join(THEMES), board["theme"])
+        board["theme"] = "classic"
     board["refresh_ms"] = max(500, int(board["refresh_ms"]))
 
     vllm = cfg["vllm"]
