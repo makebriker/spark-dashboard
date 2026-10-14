@@ -506,6 +506,13 @@ async function tick() {
   const dot = document.getElementById('conn-status');
   try {
     const resp = await fetch('/api/board');
+    // Behind a cookie gate (auth-gate), an expired session turns this poll
+    // into a redirect to the login page. Go there rather than failing to
+    // parse its HTML every tick.
+    if (resp.redirected && new URL(resp.url).pathname === '/login') {
+      location.href = '/login?next=' + encodeURIComponent(location.pathname);
+      return;
+    }
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     renderBoard(await resp.json());
     dot.className = 'conn-dot connected';
