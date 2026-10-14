@@ -20,10 +20,6 @@ values are preserved under ``netdev_rx_rate``/``netdev_tx_rate`` rather than
 discarded.
 
 Like the layer it wraps: sysfs and psutil only, no subprocess, no ethtool.
-
-Source of truth for this file lives in the infrastructure repository at
-devices/servers/gb10/sparkview/net_extra.py — it is deployed byte-identical to
-/home/lesha/spark-dashboard/spark_dashboard/net_extra.py on GB10 and GB10-2.
 """
 
 from __future__ import annotations
@@ -38,7 +34,7 @@ from sparkview.layers.network import get_net_info as _sv_get_net_info
 
 NET_SYS = pathlib.Path("/sys/class/net")
 
-# Mirrors the skip rules in collectors.get_net_info_fallback()
+# Also used by collectors.get_net_info_fallback()
 SKIP_IFACES = {"lo", "docker0"}
 SKIP_PREFIXES = ("br-", "veth", "virbr", "tun", "tap")
 

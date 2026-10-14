@@ -62,8 +62,13 @@ systemctl --user enable spark-dashboard >/dev/null 2>&1 || true
 systemctl --user restart spark-dashboard
 loginctl enable-linger "$(whoami)" >/dev/null 2>&1 || true
 
-sleep 2
-if curl -sf -o /dev/null http://localhost:8500/api/metrics; then
+# nvitop/NVML init can take a few seconds; poll rather than check once.
+ok=0
+for _ in $(seq 1 15); do
+  if curl -sf -o /dev/null http://localhost:8500/api/metrics; then ok=1; break; fi
+  sleep 1
+done
+if [ "$ok" = 1 ]; then
   echo "==> OK: dashboard responding on :8500"
 else
   echo "==> FAILED: /api/metrics not responding" >&2

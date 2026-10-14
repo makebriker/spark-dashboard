@@ -23,7 +23,7 @@ from spark_dashboard.config import get_config
 from spark_dashboard.vllm_probe import get_vllm_info
 
 # Wraps sparkview.layers.network — adds onboard ethernet, WiFi and IPv4
-from spark_dashboard.net_extra import get_net_info_all
+from spark_dashboard.net_extra import NET_SYS, SKIP_IFACES, SKIP_PREFIXES, get_net_info_all
 
 # Wraps sparkview.layers.gpu / throttle — corrects mem_used and the
 # throttle-bit table without touching the upstream clone (see PATCHES.md)
@@ -32,9 +32,6 @@ from spark_dashboard.gpu_throttle_fix import get_throttle_info_fixed as get_thro
 
 log = logging.getLogger("spark_dashboard.collectors")
 
-NET_SYS = psutil.Path("/sys/class/net") if hasattr(psutil, "Path") else None
-SKIP_IFACES = {"lo", "docker0"}
-SKIP_PREFIXES = ("br-",)
 _prev_net: dict[str, dict] = {}
 _prev_net_time: float = 0.0
 
@@ -63,7 +60,7 @@ def get_disk_info() -> list[dict]:
 
 
 def get_net_info_fallback() -> list[dict]:
-    """Fallback network collector for non-ConnectX-7 interfaces."""
+    """Generic netdev collector, used only if net_extra fails outright."""
     global _prev_net_time
 
     now = time.monotonic()
@@ -72,11 +69,8 @@ def get_net_info_fallback() -> list[dict]:
 
     results = []
     net_io = psutil.net_io_counters(pernic=True)
-    from pathlib import Path as _Path
 
-    net_sys = _Path("/sys/class/net")
-
-    for iface_path in sorted(net_sys.iterdir()):
+    for iface_path in sorted(NET_SYS.iterdir()):
         iface = iface_path.name
         if iface in SKIP_IFACES or iface.startswith(SKIP_PREFIXES):
             continue

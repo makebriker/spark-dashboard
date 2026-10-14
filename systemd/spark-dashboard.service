@@ -1,14 +1,12 @@
 [Unit]
 Description=SparkView Web Dashboard
-After=network-online.target
-Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/lesha/spark-dashboard
-Environment=PYTHONPATH=/home/lesha/sparkview
-Environment=PATH=/home/lesha/spark-dashboard/.venv/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/home/lesha/spark-dashboard/.venv/bin/uvicorn spark_dashboard.app:app --host 0.0.0.0 --port 8500 --no-access-log
+WorkingDirectory=%h/spark-dashboard
+Environment=PYTHONPATH=%h/sparkview
+Environment=PATH=%h/spark-dashboard/.venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/spark-dashboard/.venv/bin/uvicorn spark_dashboard.app:app --host 0.0.0.0 --port 8500 --no-access-log
 Restart=always
 RestartSec=5
 

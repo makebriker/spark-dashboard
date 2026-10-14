@@ -18,6 +18,9 @@ from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from .config import get_config
 
 STATIC = Path(__file__).parent / "static"
+# uvicorn configures only its own loggers; ours would otherwise show nothing
+# below WARNING, and the "loaded config from" line is worth having.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s: %(message)s")
 log = logging.getLogger("spark_dashboard.app")
 
 app = FastAPI(title="SparkView Dashboard", docs_url=None, redoc_url=None)
