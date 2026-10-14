@@ -37,9 +37,11 @@ import psutil
 DETECT_TTL_S = 30.0
 MODELS_TTL_S = 60.0
 # A busy vLLM API server answers /metrics (~70 KB) slowly -- 0.7 s measured
-# on gb10 mid-generation. This runs in the background sampler, never on a
-# request path, so a generous timeout costs nothing.
-HTTP_TIMEOUT_S = 3.0
+# on gb10 mid-generation, 1.3-5.3 s under Flash-Next TP=2 at 93 % GPU
+# (2026-10-14), when 3.0 s reported a serving engine DOWN. This runs in the
+# background sampler, never on a request path, so a generous timeout costs
+# nothing.
+HTTP_TIMEOUT_S = 10.0
 # A failed scrape keeps showing the last good numbers, marked stale, for this
 # long before the server is reported down. One slow answer is not an outage.
 STALE_MAX_S = 30.0
