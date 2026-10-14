@@ -63,6 +63,7 @@ endpoints = []
 metrics = ["decode_tps", "stream_tps", "prefill_tps", "running", "waiting",
            "kv_cache", "ttft", "itl", "prefix_hit"]
 rate_window_s = 10       # rates and latency means are taken over this window
+scrape_interval_s = 5    # one scrape per server per interval, however many viewers
 sparkline = true         # decode-throughput history graph
 # "top":  one full-width band above all node columns (each server labelled
 #         with its node). "node": a card inside the serving node's column.

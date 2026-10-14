@@ -111,10 +111,23 @@ only its column shows the card. Rates and latency means are taken over a sliding
 
 ## API
 
-- `GET /api/metrics` — this node's metrics, including a `vllm` block. Sampled at most
-  once a second and shared between callers. This is what other boards fetch.
+Neither endpoint collects anything when called. Background loops sample on a
+fixed cadence and the endpoints return their latest snapshot, so load on the
+GB10s and on vLLM is the same for one viewer or fifty:
+
+| Loop | Cadence | Does |
+|---|---|---|
+| local sampler | `board.refresh_ms` | this host's hardware (GB10s only) |
+| vLLM sampler | `vllm.scrape_interval_s` (5 s) | one `/metrics` scrape per server |
+| board poller | `board.refresh_ms` | every configured node's `/api/metrics` |
+
+A missed poll or a slow vLLM answer keeps the last good data, marked delayed,
+for 30 s before anything is shown as down.
+
+- `GET /api/metrics` — this node's latest sample, including a `vllm` block. What
+  other boards and metrics-poller read. 503 on a host with no local collectors.
 - `GET /api/board` — what the page renders: the frontend-relevant config plus every
-  configured node's metrics (`{name, url, ok, error?, data?}`), in one request.
+  configured node's latest data (`{name, url, ok, stale?, error?, data?}`).
 
 ## Stopping
 

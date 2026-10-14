@@ -8,12 +8,14 @@ import subprocess
 import threading
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 
-from .config import get_config
+from .config import MAX_NODES, get_config
 
 STATIC = Path(__file__).parent / "static"
 
@@ -27,48 +29,129 @@ app = FastAPI(title="SparkView Dashboard", docs_url=None, redoc_url=None)
 NO_CACHE = {"Cache-Control": "no-cache"}
 NO_STORE = {"Cache-Control": "no-store"}
 
-REMOTE_TIMEOUT_S = 1.5
+# Nothing on a request path collects or fetches anything. Two background loops
+# do all the work on a fixed cadence and every HTTP handler only reads their
+# latest snapshot, so load is the same for one viewer or fifty:
+#
+#   local sampler  this host's hardware, every board.refresh_ms (only on a
+#                  host that has the collectors -- a GB10, not the Mac board)
+#   board poller   every configured node, every board.refresh_ms
+#
+# vLLM has its own loop in vllm_probe (scrape_interval_s), for the same reason.
 
-# The collectors keep delta state in module globals (network rates, vLLM
-# windows), and several browsers -- or another node's board -- may poll at
-# once. Serialise collection and share one sample per second between callers.
-LOCAL_MIN_AGE_S = 1.0
-_collect_lock = threading.Lock()
-_last: tuple[float, dict] | None = None
-
-
-def local_metrics() -> dict:
-    # Imported here, not at module load: the collectors need SparkView and
-    # NVIDIA hardware, and a board whose nodes are all remote (e.g. on a Mac)
-    # has neither.
-    from .collectors import get_metrics
-
-    global _last
-    with _collect_lock:
-        if _last and time.monotonic() - _last[0] < LOCAL_MIN_AGE_S:
-            return _last[1]
-        data = get_metrics()
-        _last = (time.monotonic(), data)
-        return data
+REMOTE_TIMEOUT_S = 3.0
+# A node that misses a poll keeps its last data, flagged stale, this long.
+STALE_MAX_S = 30.0
 
 
-def remote_metrics(url: str) -> dict:
+class _Snapshot:
+    def __init__(self):
+        self.value = None
+        self.ready = threading.Event()
+
+    def set(self, value):
+        self.value = value
+        self.ready.set()
+
+    async def get(self, wait_s: float = 5.0):
+        if not self.ready.is_set():
+            await asyncio.to_thread(self.ready.wait, wait_s)
+        return self.value
+
+
+_local = _Snapshot()     # {"ok": bool, "data"| "error", "at": monotonic}
+_board = _Snapshot()     # [node payload, ...]
+_started = False
+
+
+def _every(period_s, fn, name):
+    """Run fn on a fixed cadence (start-to-start) in a daemon thread."""
+    def loop():
+        while True:
+            t0 = time.monotonic()
+            try:
+                fn()
+            except Exception as err:  # never let a loop die
+                print(f"{name}: {type(err).__name__}: {err}", flush=True)
+            time.sleep(max(0.2, period_s() - (time.monotonic() - t0)))
+    threading.Thread(target=loop, name=name, daemon=True).start()
+
+
+def _refresh_s() -> float:
+    return get_config()["board"]["refresh_ms"] / 1000
+
+
+def _start_local_sampler() -> bool:
+    try:
+        # The collectors need SparkView and NVIDIA hardware; a board whose
+        # nodes are all remote (the Mac) has neither and samples nothing.
+        from .collectors import get_metrics
+    except ImportError as err:
+        _local.set({"ok": False, "error": f"no local collectors on this host ({err})"})
+        return False
+
+    from .vllm_probe import start_sampler
+    start_sampler(lambda: get_config()["vllm"])
+
+    def sample():
+        _local.set({"ok": True, "data": get_metrics(), "at": time.monotonic()})
+
+    _every(_refresh_s, sample, "local-sampler")
+    return True
+
+
+def _fetch_remote(url: str) -> dict:
     with urllib.request.urlopen(url + "/api/metrics", timeout=REMOTE_TIMEOUT_S) as resp:
         return json.loads(resp.read())
 
 
-async def node_payload(node: dict) -> dict:
+_last_good: dict[str, tuple[float, dict]] = {}
+
+
+def _poll_node(node: dict) -> dict:
     out = {"name": node["name"], "url": node["url"], "cards": node.get("cards")}
     try:
         if node["url"] == "local":
-            data = await asyncio.to_thread(local_metrics)
+            snap = _local.value or {"ok": False, "error": "local sampler not ready"}
+            if not snap["ok"]:
+                raise RuntimeError(snap["error"])
+            data = snap["data"]
         else:
-            data = await asyncio.to_thread(remote_metrics, node["url"])
+            data = _fetch_remote(node["url"])
+        _last_good[node["url"]] = (time.monotonic(), data)
         out.update(ok=True, data=data)
     except Exception as err:
-        out.update(ok=False, error=f"{type(err).__name__}: {err}")
+        error = f"{type(err).__name__}: {err}"
+        last = _last_good.get(node["url"])
+        if last and time.monotonic() - last[0] < STALE_MAX_S:
+            out.update(ok=True, data=last[1], stale=True, error=error,
+                       age_s=round(time.monotonic() - last[0]))
+        else:
+            out.update(ok=False, error=error)
     return out
 
+
+def _start_board_poller():
+    pool = ThreadPoolExecutor(max_workers=MAX_NODES, thread_name_prefix="node-fetch")
+
+    def poll():
+        nodes = get_config()["nodes"]
+        _board.set(list(pool.map(_poll_node, nodes)))
+
+    _every(_refresh_s, poll, "board-poller")
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    global _started
+    if not _started:  # idempotent under reload/test clients
+        _started = True
+        _start_local_sampler()
+        _start_board_poller()
+    yield
+
+
+app.router.lifespan_context = lifespan
 
 def frontend_config(cfg: dict) -> dict:
     return {
@@ -95,16 +178,19 @@ JS_VERSION = _git_version()
 
 @app.get("/api/metrics")
 async def metrics():
-    """This node only. Also what other boards fetch when they list us as a node."""
-    data = await asyncio.to_thread(local_metrics)
-    return JSONResponse(content=data, headers=NO_STORE)
+    """This node's latest sample. What other boards and metrics-poller read."""
+    snap = await _local.get()
+    if not snap or not snap["ok"]:
+        error = snap["error"] if snap else "local sampler not ready"
+        return JSONResponse(content={"error": error}, status_code=503, headers=NO_STORE)
+    return JSONResponse(content=snap["data"], headers=NO_STORE)
 
 
 @app.get("/api/board")
 async def board():
     """Everything the page renders, in one request: config plus every node."""
     cfg = get_config()
-    nodes = await asyncio.gather(*(node_payload(n) for n in cfg["nodes"]))
+    nodes = await _board.get() or []
     return JSONResponse(
         content={"config": frontend_config(cfg), "nodes": nodes}, headers=NO_STORE
     )

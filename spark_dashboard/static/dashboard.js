@@ -361,7 +361,8 @@ function updateVLLM(F, data, _opts, ctx) {
       html += '<div class="tile' + (key === 'decode_tps' ? ' tile-hero' : '') + '"><span class="tile-label">' + label +
         '</span><span class="tile-value">' + val + (unit && val !== '—' ? '<small> ' + unit + '</small>' : '') + '</span></div>';
     }
-    html += '</div><div class="vllm-foot">averaged over ' + num(s.window_s, 0) + ' s</div></div></div>';
+    html += '</div><div class="vllm-foot">' + (s.stale ? '<span class="warn" title="' + esc(s.error) +
+      '">stats delayed, showing last read · </span>' : '') + 'averaged over ' + num(s.window_s, 0) + ' s</div></div></div>';
   });
   F.html('servers', html);
 }
@@ -394,7 +395,9 @@ function buildNode(node, cfg, cards) {
 function renderNode(state, node, cfg) {
   const el = state.el;
   const dot = el.querySelector('.node-dot');
-  el.querySelector('.node-err').textContent = node.ok ? '' : node.error;
+  const err = el.querySelector('.node-err');
+  err.textContent = !node.ok ? node.error : node.stale ? 'no update for ' + node.age_s + ' s' : '';
+  err.classList.toggle('warn', !!node.stale);
   dot.className = 'node-dot ' + (node.ok ? 'ok' : 'bad');
   if (node.ok) state.seen = true;
   // Down after having answered: keep its last values, greyed. Never answered:

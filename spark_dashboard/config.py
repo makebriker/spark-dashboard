@@ -73,6 +73,9 @@ DEFAULTS: dict = {
             "kv_cache", "ttft", "itl", "prefix_hit",
         ],
         "rate_window_s": 10,
+        # How often this node scrapes vLLM -- once, for every reader. A busy
+        # server takes ~0.7 s to answer, so keep this well above that.
+        "scrape_interval_s": 5,
         "sparkline": True,
         # "top": one full-width band above the node columns, gathering every
         # node's servers. "node": a card inside the column of the node serving.
@@ -114,6 +117,9 @@ def _validate(cfg: dict) -> dict:
         log.warning("vllm.enabled must be \"auto\", true or false, got %r", vllm["enabled"])
         vllm["enabled"] = "auto"
     vllm["rate_window_s"] = max(2, float(vllm["rate_window_s"]))
+    vllm["scrape_interval_s"] = max(1, float(vllm["scrape_interval_s"]))
+    # The window must span at least two scrapes to yield a rate.
+    vllm["rate_window_s"] = max(vllm["rate_window_s"], 2 * vllm["scrape_interval_s"])
     if vllm["placement"] not in ("top", "node"):
         log.warning("vllm.placement must be 'top' or 'node', got %r", vllm["placement"])
         vllm["placement"] = "top"

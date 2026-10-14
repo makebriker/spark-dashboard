@@ -36,7 +36,13 @@ import psutil
 
 DETECT_TTL_S = 30.0
 MODELS_TTL_S = 60.0
-HTTP_TIMEOUT_S = 1.0
+# A busy vLLM API server answers /metrics (~70 KB) slowly -- 0.7 s measured
+# on gb10 mid-generation. This runs in the background sampler, never on a
+# request path, so a generous timeout costs nothing.
+HTTP_TIMEOUT_S = 3.0
+# A failed scrape keeps showing the last good numbers, marked stale, for this
+# long before the server is reported down. One slow answer is not an outage.
+STALE_MAX_S = 30.0
 DEFAULT_PORT = 8000
 
 # Sample: name{label="v",...} value [timestamp]
@@ -185,6 +191,7 @@ class _Endpoint:
         self.samples: deque[tuple[float, dict[str, float]]] = deque()
         self.model: dict | None = None
         self.model_at = 0.0
+        self.last_ok: tuple[float, dict] | None = None
 
     def _models(self) -> dict | None:
         """/v1/models, cached. 401 under --api-key is fine: the model name
@@ -208,14 +215,17 @@ class _Endpoint:
         return self.samples[0]
 
     def collect(self, window_s: float) -> dict:
-        now = time.monotonic()
         out: dict = {"endpoint": self.url, "ok": False}
         try:
             raw, labels = parse_prometheus(_http_get(self.url + "/metrics").decode())
         except Exception as err:
             out["error"] = f"{type(err).__name__}: {err}"
-            self.samples.clear()
+            # Keep the window: a timeout is not a restart, and counter resets
+            # are detected below when the server answers again.
+            if self.last_ok and time.monotonic() - self.last_ok[0] < STALE_MAX_S:
+                return {**self.last_ok[1], "stale": True, "error": out["error"]}
             return out
+        now = time.monotonic()
 
         cur: dict[str, float] = {}
         for key, names in _COUNTERS.items():
@@ -289,6 +299,7 @@ class _Endpoint:
                 "max_model_len": (model or {}).get("max_model_len") or _cmdline_max_len.get(self.url),
             },
         )
+        self.last_ok = (now, out)
         return out
 
 
@@ -298,7 +309,7 @@ _detected: list[str] = []
 _detected_at = -DETECT_TTL_S
 
 
-def get_vllm_info(cfg: dict) -> dict:
+def _collect_all(cfg: dict) -> dict:
     """{"detected": bool, "servers": [...]} for this node, per the [vllm] config."""
     global _detected, _detected_at
     if cfg["enabled"] is False:
@@ -314,3 +325,36 @@ def get_vllm_info(cfg: dict) -> dict:
             del _endpoints[gone]
         servers = [_endpoints.setdefault(u, _Endpoint(u)).collect(cfg["rate_window_s"]) for u in urls]
     return {"detected": any(s["ok"] for s in servers), "servers": servers}
+
+
+# ── Background sampler ────────────────────────────────────────────────────────
+# vLLM is scraped by exactly one loop per node, every scrape_interval_s, no
+# matter how many browsers, boards or pollers read this node. Readers get the
+# latest result from get_vllm_info() without touching vLLM at all.
+
+_latest: dict = {"detected": False, "servers": []}
+_sampler: threading.Thread | None = None
+
+
+def get_vllm_info(_cfg: dict | None = None) -> dict:
+    return _latest
+
+
+def start_sampler(get_cfg) -> None:
+    """Start the scrape loop once. get_cfg() returns the current [vllm] config."""
+    global _sampler
+    if _sampler is not None:
+        return
+
+    def loop():
+        global _latest
+        while True:
+            cfg = get_cfg()
+            try:
+                _latest = _collect_all(cfg)
+            except Exception as err:  # never let the loop die
+                _latest = {"detected": False, "servers": [], "error": str(err)}
+            time.sleep(cfg["scrape_interval_s"])
+
+    _sampler = threading.Thread(target=loop, name="vllm-sampler", daemon=True)
+    _sampler.start()

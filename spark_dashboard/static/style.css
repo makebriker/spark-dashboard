@@ -130,6 +130,7 @@ header {
   color: var(--text-dim);
 }
 .node-err { color: var(--red); }
+.node-err.warn, .warn { color: var(--orange); }
 
 /* Card */
 .card {
