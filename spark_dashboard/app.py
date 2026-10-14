@@ -9,14 +9,13 @@ import subprocess
 import threading
 import time
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 
-from .config import MAX_NODES, get_config
+from .config import get_config
 
 STATIC = Path(__file__).parent / "static"
 log = logging.getLogger("spark_dashboard.app")
@@ -37,7 +36,8 @@ NO_STORE = {"Cache-Control": "no-store"}
 #
 #   local sampler  this host's hardware, every board.refresh_ms (only on a
 #                  host that has the collectors -- a GB10, not the Mac board)
-#   board poller   every configured node, every board.refresh_ms
+#   node pollers   one loop per configured node, every board.refresh_ms, so
+#                  an unreachable node burning its timeout delays only itself
 #
 # vLLM has its own loop in vllm_probe (scrape_interval_s), for the same reason.
 
@@ -66,11 +66,11 @@ _board = _Snapshot()     # [node payload, ...]
 _started = False
 
 
-def _every(period_s, fn, name):
+def _every(period_s, fn, name, stop: threading.Event | None = None):
     """Run fn on a fixed cadence (start-to-start) in a daemon thread."""
     def loop():
         period = 2.0
-        while True:
+        while not (stop and stop.is_set()):
             t0 = time.monotonic()
             try:
                 period = period_s()
@@ -112,10 +112,10 @@ def _fetch_remote(url: str) -> dict:
 _last_good: dict[str, tuple[float, dict]] = {}
 
 
-def _poll_node(node: dict) -> dict:
-    out = {"name": node["name"], "url": node["url"], "cards": node.get("cards")}
+def _poll_node(url: str) -> dict:
+    out: dict = {"url": url}
     try:
-        if node["url"] == "local":
+        if url == "local":
             snap = _local.value or {"ok": False, "error": "local sampler not ready"}
             if not snap["ok"]:
                 raise RuntimeError(snap["error"])
@@ -127,12 +127,12 @@ def _poll_node(node: dict) -> dict:
                 raise RuntimeError(f"local sampler stalled, last sample {age:.0f} s ago")
             data = snap["data"]
         else:
-            data = _fetch_remote(node["url"])
-        _last_good[node["url"]] = (time.monotonic(), data)
+            data = _fetch_remote(url)
+        _last_good[url] = (time.monotonic(), data)
         out.update(ok=True, data=data)
     except Exception as err:
         error = f"{type(err).__name__}: {err}"
-        last = _last_good.get(node["url"])
+        last = _last_good.get(url)
         if last and time.monotonic() - last[0] < STALE_MAX_S:
             out.update(ok=True, data=last[1], stale=True, error=error,
                        age_s=round(time.monotonic() - last[0]))
@@ -141,14 +141,41 @@ def _poll_node(node: dict) -> dict:
     return out
 
 
+# url -> latest _poll_node result, each written by that node's own loop.
+_results: dict[str, dict] = {}
+_pollers: dict[str, threading.Event] = {}   # url -> stop flag for its loop
+
+
 def _start_board_poller():
-    pool = ThreadPoolExecutor(max_workers=MAX_NODES, thread_name_prefix="node-fetch")
+    """Keep one poll loop per configured node and assemble the board.
 
-    def poll():
+    Loops are started and stopped as nodes enter or leave the config. Each
+    writes into _results on its own cadence, so one node's 3 s timeout
+    never holds up the others; the board snapshot just gathers the latest.
+    """
+    def reconcile():
         nodes = get_config()["nodes"]
-        _board.set(list(pool.map(_poll_node, nodes)))
+        wanted = {n["url"] for n in nodes}
+        for url in _pollers.keys() - wanted:
+            _pollers.pop(url).set()
+            _results.pop(url, None)
+            _last_good.pop(url, None)
+        for url in wanted - _pollers.keys():
+            stop = threading.Event()
+            _pollers[url] = stop
+            _every(_refresh_s, lambda u=url: _results.__setitem__(u, _poll_node(u)),
+                   f"node-poll {url}", stop)
+        # Hold the first snapshot until every node has answered once, so the
+        # page does not open with every node flashed red for a tick.
+        if not _board.ready.is_set() and not wanted <= _results.keys():
+            return
+        _board.set([
+            {"name": n["name"], "cards": n.get("cards"),
+             **_results.get(n["url"], {"url": n["url"], "ok": False, "error": "first poll pending"})}
+            for n in nodes
+        ])
 
-    _every(_refresh_s, poll, "board-poller")
+    _every(_refresh_s, reconcile, "board-reconcile")
 
 
 @asynccontextmanager
