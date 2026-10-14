@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import subprocess
 import threading
 import time
@@ -18,6 +19,7 @@ from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from .config import MAX_NODES, get_config
 
 STATIC = Path(__file__).parent / "static"
+log = logging.getLogger("spark_dashboard.app")
 
 app = FastAPI(title="SparkView Dashboard", docs_url=None, redoc_url=None)
 
@@ -67,13 +69,15 @@ _started = False
 def _every(period_s, fn, name):
     """Run fn on a fixed cadence (start-to-start) in a daemon thread."""
     def loop():
+        period = 2.0
         while True:
             t0 = time.monotonic()
             try:
+                period = period_s()
                 fn()
             except Exception as err:  # never let a loop die
-                print(f"{name}: {type(err).__name__}: {err}", flush=True)
-            time.sleep(max(0.2, period_s() - (time.monotonic() - t0)))
+                log.warning("%s: %s: %s", name, type(err).__name__, err)
+            time.sleep(max(0.2, period - (time.monotonic() - t0)))
     threading.Thread(target=loop, name=name, daemon=True).start()
 
 
@@ -115,6 +119,12 @@ def _poll_node(node: dict) -> dict:
             snap = _local.value or {"ok": False, "error": "local sampler not ready"}
             if not snap["ok"]:
                 raise RuntimeError(snap["error"])
+            # A stalled or dead sampler must not pass off its last sample as
+            # live: beyond a few periods it takes the same stale/down path
+            # as a remote node that stopped answering.
+            age = time.monotonic() - snap["at"]
+            if age > max(3 * _refresh_s(), REMOTE_TIMEOUT_S):
+                raise RuntimeError(f"local sampler stalled, last sample {age:.0f} s ago")
             data = snap["data"]
         else:
             data = _fetch_remote(node["url"])

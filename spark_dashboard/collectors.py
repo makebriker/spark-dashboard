@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import platform
 import time
 from collections import deque
@@ -28,6 +29,8 @@ from spark_dashboard.net_extra import get_net_info_all
 # throttle-bit table without touching the upstream clone (see PATCHES.md)
 from spark_dashboard.gpu_throttle_fix import get_gpu_info_fixed as get_gpu_info
 from spark_dashboard.gpu_throttle_fix import get_throttle_info_fixed as get_throttle_info
+
+log = logging.getLogger("spark_dashboard.collectors")
 
 NET_SYS = psutil.Path("/sys/class/net") if hasattr(psutil, "Path") else None
 SKIP_IFACES = {"lo", "docker0"}
@@ -171,11 +174,23 @@ def average_net_rates(entries: list[dict]) -> None:
         del _net_hist[gone]
 
 
+_reported: set[str] = set()
+
+
 def _safe_call(func, *args, default=None, **kwargs):
+    """Call a collector; on failure return default and log the error once.
+
+    A silent failure just hides a card, which looks like a config choice.
+    Logging once per distinct message keeps a permanently broken collector
+    from flooding the journal every refresh.
+    """
     try:
-        result = func(*args, **kwargs)
-        return result
-    except Exception:
+        return func(*args, **kwargs)
+    except Exception as err:
+        key = f"{getattr(func, '__name__', func)}: {type(err).__name__}: {err}"
+        if key not in _reported:
+            _reported.add(key)
+            log.warning("collector failed (reported once): %s", key, exc_info=True)
         return default
 
 

@@ -99,6 +99,8 @@ def _merge(base: dict, override: dict) -> dict:
 
 def _validate(cfg: dict) -> dict:
     board = cfg["board"]
+    if not isinstance(board["cards"], list):
+        raise TypeError(f"board.cards must be a list, got {board['cards']!r}")
     unknown = [c for c in board["cards"] if c not in CARDS]
     if unknown:
         log.warning("unknown cards ignored: %s (known: %s)", unknown, ", ".join(CARDS))
@@ -109,6 +111,8 @@ def _validate(cfg: dict) -> dict:
     board["refresh_ms"] = max(500, int(board["refresh_ms"]))
 
     vllm = cfg["vllm"]
+    if not isinstance(vllm["metrics"], list) or not isinstance(vllm["endpoints"], list):
+        raise TypeError("vllm.metrics and vllm.endpoints must be lists")
     unknown = [m for m in vllm["metrics"] if m not in VLLM_METRICS]
     if unknown:
         log.warning("unknown vllm.metrics ignored: %s", unknown)
@@ -124,7 +128,12 @@ def _validate(cfg: dict) -> dict:
         log.warning("vllm.placement must be 'top' or 'node', got %r", vllm["placement"])
         vllm["placement"] = "top"
 
-    nodes = [n for n in cfg["nodes"] if isinstance(n, dict) and n.get("url")]
+    if not isinstance(cfg["nodes"], list):
+        raise TypeError("nodes must be an array of tables ([[nodes]])")
+    nodes = [n for n in cfg["nodes"] if isinstance(n, dict) and isinstance(n.get("url"), str) and n["url"]]
+    dropped = [n for n in cfg["nodes"] if n not in nodes]
+    if dropped:
+        log.warning("nodes without a string url ignored: %s", dropped)
     if len(nodes) > MAX_NODES:
         log.warning("%d nodes configured; only the first %d are shown", len(nodes), MAX_NODES)
         nodes = nodes[:MAX_NODES]
@@ -132,6 +141,8 @@ def _validate(cfg: dict) -> dict:
         n["url"] = n["url"].rstrip("/")
         n.setdefault("name", "")
         if "cards" in n:
+            if not isinstance(n["cards"], list):
+                raise TypeError(f"nodes.cards must be a list, got {n['cards']!r}")
             n["cards"] = [c for c in n["cards"] if c in CARDS]
     cfg["nodes"] = nodes or copy.deepcopy(DEFAULTS["nodes"])
     return cfg
@@ -156,15 +167,20 @@ def get_config() -> dict:
     back to defaults, so a typo mid-edit doesn't flip the board around.
     """
     global _cache
-    path = config_path()
-    mtime = path.stat().st_mtime if path else 0.0
     with _lock:
+        try:
+            path = config_path()
+            mtime = path.stat().st_mtime if path else 0.0
+        except OSError:  # removed between the lookup and the stat
+            path, mtime = None, 0.0
         if _cache and _cache[0] == path and _cache[1] == mtime:
             return _cache[2]
         try:
             raw = tomllib.loads(path.read_text()) if path else {}
             cfg = _validate(_merge(DEFAULTS, raw))
-        except (OSError, tomllib.TOMLDecodeError, TypeError, ValueError) as err:
+        # Anything at all: a bad value must never escape into the sampler
+        # threads, which have no other way to recover from a config edit.
+        except Exception as err:
             log.error("config %s unusable, keeping previous: %s", path, err)
             cfg = _cache[2] if _cache else _validate(copy.deepcopy(DEFAULTS))
         else:
