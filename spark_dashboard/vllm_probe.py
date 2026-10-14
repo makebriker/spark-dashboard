@@ -1,0 +1,282 @@
+"""vLLM detection and inference metrics.
+
+A vLLM OpenAI-compatible server exposes Prometheus metrics at ``/metrics`` on
+its API port. This module finds those servers, scrapes them, and turns the raw
+counters and histograms into the numbers worth looking at: decode throughput,
+per-stream decode speed, queue depth, KV-cache use, TTFT, inter-token latency.
+
+Detection: every ``DETECT_TTL_S`` the process table is scanned for a vLLM API
+server (``vllm serve ...`` or ``-m vllm.entrypoints.openai.api_server``) and
+its ``--port`` is read off the command line (default 8000). Container processes
+are visible in the host's process table, so a dockerised server is found too —
+as long as the port is the same on the host (``--network host`` or ``-p N:N``).
+Anything more exotic: list the URL under ``[vllm] endpoints``.
+
+In a multi-node deployment (tensor-parallel over Ray) only the head node runs
+the API server, so only the head node's board shows the vLLM card.
+
+Rates are computed over a sliding window of samples kept here, not between
+consecutive requests, so two browsers polling the same board don't halve each
+other's window. Metric names changed across vLLM releases; each derived value
+lists every spelling it accepts, newest first.
+
+stdlib only — urllib, no prometheus_client, no requests.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import threading
+import time
+import urllib.request
+from collections import deque
+
+import psutil
+
+DETECT_TTL_S = 30.0
+MODELS_TTL_S = 60.0
+HTTP_TIMEOUT_S = 1.0
+DEFAULT_PORT = 8000
+
+# Sample: name{label="v",...} value [timestamp]
+_LINE = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^}]*\})?\s+(\S+)')
+_LABEL = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
+
+# Gauges that describe a fraction/level: averaged across label sets (data-
+# parallel engines each report their own). Everything else is summed.
+_MEAN_GAUGES = {"vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc", "vllm:gpu_prefix_cache_hit_rate"}
+
+_COUNTERS = {
+    "gen_tokens": ("vllm:generation_tokens_total",),
+    "prompt_tokens": ("vllm:prompt_tokens_total",),
+    "requests": ("vllm:request_success_total",),
+    "preemptions": ("vllm:num_preemptions_total",),
+    "prefix_hits": ("vllm:prefix_cache_hits_total", "vllm:prefix_cache_hits"),
+    "prefix_queries": ("vllm:prefix_cache_queries_total", "vllm:prefix_cache_queries"),
+    "spec_accepted": ("vllm:spec_decode_num_accepted_tokens_total",),
+    "spec_draft": ("vllm:spec_decode_num_draft_tokens_total",),
+}
+
+_HISTOGRAMS = {
+    "ttft": ("vllm:time_to_first_token_seconds",),
+    "itl": (
+        "vllm:inter_token_latency_seconds",
+        "vllm:time_per_output_token_seconds",
+        "vllm:request_time_per_output_token_seconds",
+    ),
+    "e2e": ("vllm:e2e_request_latency_seconds",),
+}
+
+_GAUGES = {
+    "running": ("vllm:num_requests_running",),
+    "waiting": ("vllm:num_requests_waiting",),
+    "kv_cache": ("vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc"),
+    "prefix_hit_v0": ("vllm:gpu_prefix_cache_hit_rate",),
+}
+
+
+def parse_prometheus(text: str) -> tuple[dict[str, float], dict[str, str]]:
+    """Collapse exposition text to {metric: value}, merging label sets.
+
+    Also returns the labels seen on the first vllm sample, which is where the
+    served model name lives (``model_name="..."``).
+    """
+    sums: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    labels: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line or line[0] == "#":
+            continue
+        m = _LINE.match(line)
+        if not m:
+            continue
+        name, lbl, raw = m.groups()
+        if name.endswith("_created") or "_bucket" in name:
+            continue
+        try:
+            val = float(raw)
+        except ValueError:
+            continue
+        if val != val:  # NaN
+            continue
+        if lbl and not labels and name.startswith("vllm:"):
+            labels = dict(_LABEL.findall(lbl))
+        sums[name] = sums.get(name, 0.0) + val
+        counts[name] = counts.get(name, 0) + 1
+    for name in _MEAN_GAUGES & sums.keys():
+        sums[name] /= counts[name]
+    return sums, labels
+
+
+def _first(values: dict[str, float], names: tuple[str, ...]) -> float | None:
+    for n in names:
+        if n in values:
+            return values[n]
+    return None
+
+
+def _http_get(url: str) -> bytes:
+    req = urllib.request.Request(url, headers={"Accept": "text/plain, application/json"})
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
+        return resp.read()
+
+
+def _port_from_cmdline(cmd: list[str]) -> int:
+    for i, arg in enumerate(cmd):
+        if arg == "--port" and i + 1 < len(cmd):
+            return int(cmd[i + 1])
+        if arg.startswith("--port="):
+            return int(arg.split("=", 1)[1])
+    return DEFAULT_PORT
+
+
+def _is_vllm_server(cmd: list[str]) -> bool:
+    joined = " ".join(cmd)
+    if "vllm.entrypoints.openai.api_server" in joined:
+        return True
+    # `vllm serve <model>` — argv[0] may be a full path to the vllm script, or
+    # python running it.
+    for i, arg in enumerate(cmd[:-1]):
+        if arg.rsplit("/", 1)[-1] == "vllm" and cmd[i + 1] == "serve":
+            return True
+    return False
+
+
+def detect_endpoints() -> list[str]:
+    ports: set[int] = set()
+    for proc in psutil.process_iter(["cmdline"]):
+        cmd = proc.info.get("cmdline") or []
+        if not cmd:
+            continue
+        try:
+            if _is_vllm_server(cmd):
+                ports.add(_port_from_cmdline(cmd))
+        except ValueError:
+            continue
+    return [f"http://127.0.0.1:{p}" for p in sorted(ports)]
+
+
+class _Endpoint:
+    def __init__(self, url: str):
+        self.url = url
+        self.samples: deque[tuple[float, dict[str, float]]] = deque()
+        self.model: dict | None = None
+        self.model_at = 0.0
+
+    def _models(self) -> dict | None:
+        """/v1/models, cached. 401 under --api-key is fine: the model name
+        also comes from the metric labels, only max_model_len is lost."""
+        now = time.monotonic()
+        if now - self.model_at < MODELS_TTL_S:
+            return self.model
+        self.model_at = now
+        try:
+            data = json.loads(_http_get(self.url + "/v1/models"))["data"][0]
+            self.model = {"id": data.get("id"), "max_model_len": data.get("max_model_len")}
+        except Exception:
+            self.model = None
+        return self.model
+
+    def _window(self, now: float, values: dict[str, float], window_s: float):
+        """Append this sample; return the oldest one still inside the window."""
+        self.samples.append((now, values))
+        while len(self.samples) > 2 and now - self.samples[1][0] >= window_s:
+            self.samples.popleft()
+        return self.samples[0]
+
+    def collect(self, window_s: float) -> dict:
+        now = time.monotonic()
+        out: dict = {"endpoint": self.url, "ok": False}
+        try:
+            raw, labels = parse_prometheus(_http_get(self.url + "/metrics").decode())
+        except Exception as err:
+            out["error"] = f"{type(err).__name__}: {err}"
+            self.samples.clear()
+            return out
+
+        cur: dict[str, float] = {}
+        for key, names in _COUNTERS.items():
+            v = _first(raw, names)
+            if v is not None:
+                cur[key] = v
+        for key, names in _HISTOGRAMS.items():
+            s = _first(raw, tuple(n + "_sum" for n in names))
+            c = _first(raw, tuple(n + "_count" for n in names))
+            if s is not None and c is not None:
+                cur[key + "_sum"], cur[key + "_count"] = s, c
+
+        t0, prev = self._window(now, cur, window_s)
+        # Counters only go down when the server restarted: start over.
+        if any(cur.get(k, 0) < v for k, v in prev.items()):
+            self.samples.clear()
+            self.samples.append((now, cur))
+            t0, prev = now, cur
+        dt = now - t0
+
+        def delta(key):
+            if key in cur and key in prev:
+                return cur[key] - prev[key]
+            return None
+
+        def rate(key):
+            d = delta(key)
+            return d / dt if d is not None and dt >= 0.5 else None
+
+        def ratio(num, den):
+            n, d = delta(num), delta(den)
+            return n / d if n is not None and d else None
+
+        gauges = {k: _first(raw, names) for k, names in _GAUGES.items()}
+        itl = ratio("itl_sum", "itl_count")
+        prefix_hit = ratio("prefix_hits", "prefix_queries")
+        if prefix_hit is None and gauges["prefix_hit_v0"] is not None:
+            prefix_hit = gauges["prefix_hit_v0"]
+        model = self._models()
+
+        out.update(
+            ok=True,
+            model=labels.get("model_name") or (model or {}).get("id"),
+            window_s=round(dt, 1),
+            metrics={
+                "decode_tps": rate("gen_tokens"),
+                "stream_tps": 1.0 / itl if itl else None,
+                "prefill_tps": rate("prompt_tokens"),
+                "running": gauges["running"],
+                "waiting": gauges["waiting"],
+                "kv_cache": gauges["kv_cache"] * 100 if gauges["kv_cache"] is not None else None,
+                "ttft": ratio("ttft_sum", "ttft_count"),
+                "itl": itl,
+                "e2e": ratio("e2e_sum", "e2e_count"),
+                "req_rate": rate("requests"),
+                "prefix_hit": prefix_hit * 100 if prefix_hit is not None else None,
+                "spec_accept": (r * 100 if (r := ratio("spec_accepted", "spec_draft")) is not None else None),
+                "preemptions": delta("preemptions"),
+                "max_model_len": (model or {}).get("max_model_len"),
+            },
+        )
+        return out
+
+
+_lock = threading.Lock()
+_endpoints: dict[str, _Endpoint] = {}
+_detected: list[str] = []
+_detected_at = -DETECT_TTL_S
+
+
+def get_vllm_info(cfg: dict) -> dict:
+    """{"detected": bool, "servers": [...]} for this node, per the [vllm] config."""
+    global _detected, _detected_at
+    if cfg["enabled"] is False:
+        return {"detected": False, "servers": []}
+    with _lock:
+        urls = [u.rstrip("/") for u in cfg["endpoints"]]
+        if not urls:
+            now = time.monotonic()
+            if now - _detected_at >= DETECT_TTL_S:
+                _detected, _detected_at = detect_endpoints(), now
+            urls = _detected
+        for gone in _endpoints.keys() - set(urls):
+            del _endpoints[gone]
+        servers = [_endpoints.setdefault(u, _Endpoint(u)).collect(cfg["rate_window_s"]) for u in urls]
+    return {"detected": any(s["ok"] for s in servers), "servers": servers}

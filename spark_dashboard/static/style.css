@@ -66,18 +66,70 @@ header {
 .conn-dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
 .conn-dot.disconnected { background: var(--red); box-shadow: 0 0 6px var(--red); }
 
-/* Grid */
-main.grid {
+/* Board: one or more nodes, each with its own grid of cards */
+.board {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
   gap: 16px;
   padding: 16px 24px;
-  max-width: 1600px;
-  margin: 0 auto;
 }
 
-@media (max-width: 1100px) { main.grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 700px) { main.grid { grid-template-columns: 1fr; } }
+.board.single { max-width: 1600px; margin: 0 auto; }
+
+/* columns: nodes side by side, cards stacked inside each */
+.board.columns.multi { grid-template-columns: repeat(var(--n), minmax(0, 1fr)); }
+/* rows: one band per node, cards flow across it */
+.board.rows { grid-template-columns: 1fr; }
+
+@media (max-width: 1100px) { .board.columns.multi { grid-template-columns: 1fr; } }
+@media (max-width: 700px) { .board { padding: 12px 16px; } }
+
+.node { min-width: 0; }
+.node.never .node-grid { display: none; }
+.node.stale .node-grid { opacity: 0.4; filter: grayscale(1); }
+
+.node-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.board.single .node-grid { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 1100px) { .board.single .node-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 700px) { .board.single .node-grid { grid-template-columns: 1fr; } }
+
+.node-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 0 2px 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.node-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  align-self: center;
+  background: var(--text-dim);
+}
+.node-dot.ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.node-dot.bad { background: var(--red); box-shadow: 0 0 6px var(--red); }
+
+.node-name {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.node-meta, .node-err {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.node-err { color: var(--red); }
 
 /* Card */
 .card {
@@ -295,6 +347,76 @@ main.grid {
   color: var(--text-dim);
   margin-bottom: 4px;
 }
+
+.disk-dev { color: var(--text-dim); font-size: 11px; }
+.err { color: var(--red); }
+.muted { font-size: 12px; color: var(--text-dim); }
+
+/* vLLM */
+.vllm-server + .vllm-server { margin-top: 14px; padding-top: 12px; border-top: 1px solid #1a1a1a; }
+
+.vllm-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  min-width: 0;
+}
+
+.vllm-model, .vllm-ep {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.net-state.idle { background: #222; color: var(--text-dim); }
+
+.spark-wrap { position: relative; margin-bottom: 8px; }
+.spark { display: block; width: 100%; height: 36px; }
+.spark-line { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.spark-fill { fill: var(--accent); opacity: 0.12; }
+.spark-max {
+  position: absolute; top: 0; right: 0;
+  font-family: var(--mono); font-size: 10px; color: var(--text-dim);
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tile {
+  background: #1a1a1a;
+  border-radius: 6px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tile-label {
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.tile-value {
+  font-family: var(--mono);
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.tile-value small { font-size: 10px; color: var(--text-dim); }
+.tile-hero .tile-value { color: var(--accent); font-weight: 700; }
+
+.vllm-foot { margin-top: 6px; font-size: 10px; color: var(--text-dim); text-align: right; }
 
 /* Footer */
 footer {

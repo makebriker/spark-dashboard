@@ -1,0 +1,77 @@
+# spark-dashboard board configuration.
+#
+#   cp config.example.toml config.toml
+#
+# config.toml is gitignored, so deploy.sh's hard reset leaves it alone. It is
+# re-read whenever it changes -- no restart needed. Every key is optional;
+# anything left out falls back to the default shown here.
+
+[board]
+title = "SPARKVIEW"
+refresh_ms = 2000
+# "columns": one column per node, its cards stacked inside.
+# "rows":    one horizontal band per node, its cards side by side.
+layout = "columns"
+# Which cards to show, in this order. Drop a name to hide that card.
+# Known: vllm, gpu, memory, cpu, clock, network, disk
+cards = ["vllm", "gpu", "memory", "cpu", "clock", "network", "disk"]
+
+[cards.gpu]
+processes = 5            # rows in the GPU process table; 0 hides it
+
+[cards.cpu]
+per_core = true          # the per-core bar grid
+
+[cards.memory]
+swap = true
+psi = true               # memory-pressure (PSI) rows
+
+[cards.network]
+include = []             # shell globs; empty = every interface
+exclude = []             # e.g. ["wlP9s9", "enp1s0f1np1"]
+hide_down = false        # hide interfaces whose link is down
+
+[cards.disk]
+include = []             # mountpoint globs; empty = every mount
+exclude = []             # e.g. ["/boot*", "/snap/*"]
+
+[vllm]
+# "auto": probe for a running vLLM server and show the card only if found.
+# true:   probe, and keep the card visible ("not detected") when none is.
+# false:  never probe, never show.
+enabled = "auto"
+# Explicit server base URLs. Empty = detect from the process table
+# (`vllm serve ... --port N`, default 8000).
+endpoints = []
+# Which numbers the card shows, in this order. Available:
+#   decode_tps     aggregate generation throughput (tok/s)
+#   stream_tps     per-request decode speed, 1 / inter-token latency (tok/s)
+#   prefill_tps    prompt tokens processed (tok/s)
+#   running        requests currently being served
+#   waiting        requests queued
+#   kv_cache       KV-cache utilisation (shown as a bar)
+#   ttft           mean time to first token
+#   itl            mean inter-token latency (TPOT)
+#   e2e            mean end-to-end request latency
+#   req_rate       completed requests per second
+#   prefix_hit     prefix-cache hit rate
+#   spec_accept    speculative-decoding acceptance rate
+#   preemptions    preemptions within the window
+#   max_model_len  served context length
+metrics = ["decode_tps", "stream_tps", "prefill_tps", "running", "waiting",
+           "kv_cache", "ttft", "itl", "prefix_hit"]
+rate_window_s = 10       # rates and latency means are taken over this window
+sparkline = true         # decode-throughput history graph
+
+# Up to 4 nodes on one board. "local" is this machine, collected in-process.
+# Any other url is another Spark running this dashboard; the board fetches its
+# /api/metrics server-side, so the browser only needs to reach this one.
+# A node may override the card list with its own `cards = [...]`.
+[[nodes]]
+name = "gb10"
+url = "local"
+
+# [[nodes]]
+# name = "gb10-2"
+# url = "http://192.0.2.11:8500"
+# cards = ["gpu", "memory", "network"]
