@@ -122,16 +122,25 @@ def _http_get(url: str) -> bytes:
         return resp.read()
 
 
-def _port_from_cmdline(cmd: list[str]) -> int:
+def _arg(cmd: list[str], flag: str) -> str | None:
     for i, arg in enumerate(cmd):
-        if arg == "--port" and i + 1 < len(cmd):
-            return int(cmd[i + 1])
-        if arg.startswith("--port="):
-            return int(arg.split("=", 1)[1])
-    return DEFAULT_PORT
+        if arg == flag and i + 1 < len(cmd):
+            return cmd[i + 1]
+        if arg.startswith(flag + "="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def _port_from_cmdline(cmd: list[str]) -> int:
+    port = _arg(cmd, "--port")
+    return int(port) if port else DEFAULT_PORT
 
 
 def _is_vllm_server(cmd: list[str]) -> bool:
+    # Multi-node (--nnodes N): ranks > 0 run `vllm serve ... --headless` and
+    # open no API port. Their numbers are reported by the rank-0 node.
+    if "--headless" in cmd:
+        return False
     joined = " ".join(cmd)
     if "vllm.entrypoints.openai.api_server" in joined:
         return True
@@ -143,18 +152,27 @@ def _is_vllm_server(cmd: list[str]) -> bool:
     return False
 
 
+# url -> max_model_len read off the command line. /v1/models carries it too,
+# but sits behind --api-key while /metrics does not.
+_cmdline_max_len: dict[str, int] = {}
+
+
 def detect_endpoints() -> list[str]:
-    ports: set[int] = set()
+    found: dict[str, int | None] = {}
     for proc in psutil.process_iter(["cmdline"]):
         cmd = proc.info.get("cmdline") or []
         if not cmd:
             continue
         try:
             if _is_vllm_server(cmd):
-                ports.add(_port_from_cmdline(cmd))
+                url = f"http://127.0.0.1:{_port_from_cmdline(cmd)}"
+                max_len = _arg(cmd, "--max-model-len")
+                found[url] = int(max_len) if max_len and max_len.isdigit() else found.get(url)
         except ValueError:
             continue
-    return [f"http://127.0.0.1:{p}" for p in sorted(ports)]
+    _cmdline_max_len.clear()
+    _cmdline_max_len.update({u: n for u, n in found.items() if n})
+    return sorted(found)
 
 
 class _Endpoint:
@@ -252,7 +270,7 @@ class _Endpoint:
                 "prefix_hit": prefix_hit * 100 if prefix_hit is not None else None,
                 "spec_accept": (r * 100 if (r := ratio("spec_accepted", "spec_draft")) is not None else None),
                 "preemptions": delta("preemptions"),
-                "max_model_len": (model or {}).get("max_model_len"),
+                "max_model_len": (model or {}).get("max_model_len") or _cmdline_max_len.get(self.url),
             },
         )
         return out
