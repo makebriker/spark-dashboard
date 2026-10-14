@@ -86,12 +86,15 @@ header {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--text-dim);
-  background: var(--card-bg);
+  /* The page background, never the card one: a translucent card colour
+   * (quiet theme) turns into a white select on macOS, with unreadable options. */
+  background: var(--bg);
   border: 1px solid var(--card-border);
   border-radius: var(--radius-sm);
   padding: 3px 6px;
   cursor: pointer;
 }
+.theme-pick option { background: var(--bg); color: var(--text); }
 .theme-pick:hover, .theme-pick:focus-visible { color: var(--text); border-color: var(--text-dim); outline: none; }
 
 .conn-dot {
