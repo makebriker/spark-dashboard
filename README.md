@@ -129,6 +129,16 @@ for 30 s before anything is shown as down.
 - `GET /api/board` — what the page renders: the frontend-relevant config plus every
   configured node's latest data (`{name, url, ok, stale?, error?, data?}`).
 
+## Tests
+
+The pure logic (Prometheus parsing, vLLM rate windows, the 15 s network
+average, config merge and validation) is covered without any hardware:
+
+```bash
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest -q tests
+```
+
 ## Stopping
 
 ```bash
