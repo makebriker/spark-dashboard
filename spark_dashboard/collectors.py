@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import platform
 import time
+from collections import deque
 from datetime import datetime
 
 import psutil
@@ -114,6 +115,53 @@ def get_net_info_fallback() -> list[dict]:
     return results
 
 
+# rx_rate/tx_rate are averaged over this trailing window; the instantaneous
+# value (since the previous sample, ~board.refresh_ms) moves to *_rate_now.
+# metrics-poller stores one row every 15 s and dbt/Superset aggregate
+# rx_rate/tx_rate, so a 15 s window gives each stored row continuous coverage
+# instead of a 2 s glimpse -- regardless of how often this node is sampled.
+NET_AVG_WINDOW_S = 15.0
+_net_hist: dict[str, deque] = {}   # iface -> deque[(t, dt, rx_rate, tx_rate)]
+_net_last_t: float = 0.0
+
+
+def average_net_rates(entries: list[dict]) -> None:
+    """Replace rx_rate/tx_rate with their time-weighted mean over the window.
+
+    Each sample's rate covers exactly the interval since the previous sample,
+    so sum(rate * dt) / sum(dt) is the true byte rate over the window -- the
+    same number the raw counters would give, without needing them here.
+    """
+    global _net_last_t
+    now = time.monotonic()
+    # The first sample's rate has no real interval behind it; don't keep it.
+    dt = now - _net_last_t if _net_last_t else 0.0
+    _net_last_t = now
+    seen = set()
+    for e in entries:
+        iface = e.get("iface")
+        if iface is None:
+            continue
+        seen.add(iface)
+        rx_now, tx_now = e.get("rx_rate") or 0.0, e.get("tx_rate") or 0.0
+        e["rx_rate_now"], e["tx_rate_now"] = rx_now, tx_now
+        hist = _net_hist.setdefault(iface, deque())
+        if dt > 0:
+            hist.append((now, dt, rx_now, tx_now))
+        # Drop the oldest sample only while the rest still spans the whole
+        # window, so coverage is never shorter than NET_AVG_WINDOW_S (a 15 s
+        # poller row must not fall between two windows and miss a burst).
+        span = sum(h[1] for h in hist)
+        while hist and span - hist[0][1] >= NET_AVG_WINDOW_S:
+            span -= hist.popleft()[1]
+        if span > 0:
+            e["rx_rate"] = sum(h[1] * h[2] for h in hist) / span
+            e["tx_rate"] = sum(h[1] * h[3] for h in hist) / span
+        e["rate_window_s"] = round(span, 1)
+    for gone in _net_hist.keys() - seen:
+        del _net_hist[gone]
+
+
 def _safe_call(func, *args, default=None, **kwargs):
     try:
         result = func(*args, **kwargs)
@@ -135,6 +183,7 @@ def get_metrics() -> dict:
     net = _safe_call(get_net_info_all, default=[])
     if not net:
         net = get_net_info_fallback()
+    _safe_call(average_net_rates, net)
 
     # power_rails.read() returns PowerRailsData dataclass or None
     rails_data = _safe_call(power_rails.read, default=None)

@@ -246,7 +246,11 @@ const CARDS = {
           html += '<div class="net-stats"><span>' + esc(n.ipv4.address) + (n.ipv4.prefix ? '/' + n.ipv4.prefix : '') + '</span></div>';
         }
         if (up) {
-          html += '<div class="net-stats"><span>TX ' + fmtRate(n.tx_rate) + '</span><span>RX ' + fmtRate(n.rx_rate) + '</span>';
+          // Live value when the node has one; rx_rate/tx_rate are 15 s averages
+          // kept for metrics-poller/Superset (older nodes only have those).
+          const tx = n.tx_rate_now != null ? n.tx_rate_now : n.tx_rate;
+          const rx = n.rx_rate_now != null ? n.rx_rate_now : n.rx_rate;
+          html += '<div class="net-stats"><span>TX ' + fmtRate(tx) + '</span><span>RX ' + fmtRate(rx) + '</span>';
           if (n.rx_errors > 0 || n.tx_errors > 0) {
             html += '<span class="err">ERR rx:' + n.rx_errors + ' tx:' + n.tx_errors + '</span>';
           }
