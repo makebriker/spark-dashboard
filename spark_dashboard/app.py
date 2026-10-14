@@ -12,7 +12,6 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 
-from .collectors import get_metrics
 from .config import get_config
 
 STATIC = Path(__file__).parent / "static"
@@ -38,6 +37,11 @@ _last: tuple[float, dict] | None = None
 
 
 def local_metrics() -> dict:
+    # Imported here, not at module load: the collectors need SparkView and
+    # NVIDIA hardware, and a board whose nodes are all remote (e.g. on a Mac)
+    # has neither.
+    from .collectors import get_metrics
+
     global _last
     with _collect_lock:
         if _last and time.monotonic() - _last[0] < LOCAL_MIN_AGE_S:
