@@ -353,6 +353,25 @@ header {
 .muted { font-size: 12px; color: var(--text-dim); }
 
 /* vLLM */
+/* placement = "top": one band spanning every node column */
+.card.inference { grid-column: 1 / -1; }
+.inference [data-f="servers"] {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(560px, 100%), 1fr));
+  gap: 16px;
+}
+.inference .vllm-server {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 2fr;
+  gap: 16px;
+  align-items: start;
+}
+.inference .vllm-server + .vllm-server { margin-top: 0; padding-top: 0; border-top: none; }
+.inference .tiles { margin-top: 0; }
+@media (max-width: 700px) { .inference .vllm-server { grid-template-columns: 1fr; } }
+
+.vllm-node { font-family: var(--mono); font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+
 .vllm-server + .vllm-server { margin-top: 14px; padding-top: 12px; border-top: 1px solid #1a1a1a; }
 
 .vllm-head {

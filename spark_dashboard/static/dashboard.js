@@ -11,6 +11,7 @@ const SPARK_POINTS = 60;
 let refreshMs = 2000;
 let configKey = '';
 const nodeState = new Map();   // node key -> {key, el, cards, history}
+let inference = null;          // board-wide vLLM band when vllm.placement = "top"
 
 /* ---------- helpers ---------- */
 
@@ -331,11 +332,12 @@ function updateVLLM(F, data, _opts, ctx) {
     }
     const m = s.metrics;
     const active = (m.running || 0) > 0;
-    html += '<div class="vllm-head"><span class="net-state ' + (active ? 'up' : 'idle') + '">' +
+    html += '<div class="vllm-main"><div class="vllm-head"><span class="net-state ' + (active ? 'up' : 'idle') + '">' +
       (active ? 'SERVING' : 'IDLE') + '</span><span class="vllm-model" title="' + esc(s.endpoint) + '">' +
-      esc(s.model || s.endpoint) + '</span></div>';
+      esc(s.model || s.endpoint) + '</span>' + (s.node ? '<span class="vllm-node">on ' + esc(s.node) + '</span>' : '') + '</div>';
 
-    const hist = ctx.history['vllm' + i] || (ctx.history['vllm' + i] = []);
+    const hkey = 'vllm' + (s.node || '') + i;
+    const hist = ctx.history[hkey] || (ctx.history[hkey] = []);
     hist.push(m.decode_tps || 0);
     if (hist.length > SPARK_POINTS) hist.shift();
     if (want.sparkline && want.metrics.includes('decode_tps')) {
@@ -348,6 +350,7 @@ function updateVLLM(F, data, _opts, ctx) {
         '<div class="bar-fill ' + barClass(kv || 0) + '" style="width:' + (kv || 0).toFixed(1) + '%"></div></div>' +
         '<span class="value">' + num(kv, 1) + '%</span></div>';
     }
+    html += '</div><div class="vllm-side">';
 
     html += '<div class="tiles">';
     for (const key of want.metrics) {
@@ -358,7 +361,7 @@ function updateVLLM(F, data, _opts, ctx) {
       html += '<div class="tile' + (key === 'decode_tps' ? ' tile-hero' : '') + '"><span class="tile-label">' + label +
         '</span><span class="tile-value">' + val + (unit && val !== '—' ? '<small> ' + unit + '</small>' : '') + '</span></div>';
     }
-    html += '</div><div class="vllm-foot">averaged over ' + num(s.window_s, 0) + ' s</div></div>';
+    html += '</div><div class="vllm-foot">averaged over ' + num(s.window_s, 0) + ' s</div></div></div>';
   });
   F.html('servers', html);
 }
@@ -427,13 +430,24 @@ function renderBoard(payload) {
   const board = document.getElementById('board');
   const key = JSON.stringify(cfg) + '|' + payload.nodes.map(n => n.url + n.name + n.cards).join(',');
 
+  const top = cfg.vllm.placement === 'top' && cfg.board.cards.includes('vllm');
+
   if (key !== configKey) {
     configKey = key;
     board.innerHTML = '';
+    if (top) {
+      // One band across every node column, gathering each node's servers.
+      inference = { el: document.createElement('section'), history: inference ? inference.history : {} };
+      inference.el.className = 'card inference';
+      inference.el.innerHTML = '<h2 class="card-title">' + CARDS.vllm.title + '</h2>' + CARDS.vllm.build();
+      board.appendChild(inference.el);
+    } else {
+      inference = null;
+    }
     const keep = new Map();
     payload.nodes.forEach((node, i) => {
       const id = i + '|' + node.url;
-      const cards = (node.cards || cfg.board.cards).filter(c => CARDS[c]);
+      const cards = (node.cards || cfg.board.cards).filter(c => CARDS[c] && !(top && c === 'vllm'));
       const prev = nodeState.get(id);
       const state = { el: buildNode(node, cfg, cards), history: prev ? prev.history : {}, seen: false };
       keep.set(id, state);
@@ -449,6 +463,7 @@ function renderBoard(payload) {
   }
 
   payload.nodes.forEach((node, i) => renderNode(nodeState.get(i + '|' + node.url), node, cfg));
+  if (inference) renderInference(payload, cfg);
 
   const ok = payload.nodes.filter(n => n.ok).length;
   document.getElementById('node-count').textContent =
@@ -457,6 +472,24 @@ function renderBoard(payload) {
   document.getElementById('footer-note').textContent =
     first && first.data.info && first.data.info.kernel ? 'Kernel ' + first.data.info.kernel : '';
   document.getElementById('last-refresh').textContent = 'Last update: ' + new Date().toLocaleTimeString();
+}
+
+function renderInference(payload, cfg) {
+  const servers = [];
+  let reporting = false;
+  for (const node of payload.nodes) {
+    if (!node.ok || !node.data.vllm) continue;
+    reporting = true;
+    const name = node.name || node.data.hostname || node.url;
+    for (const s of node.data.vllm.servers) servers.push(Object.assign({ node: name }, s));
+  }
+  const data = { vllm: reporting ? { detected: servers.some(s => s.ok), servers } : undefined };
+  try {
+    const shown = updateVLLM(fields(inference.el), data, {}, { vllm: cfg.vllm, history: inference.history });
+    inference.el.classList.toggle('hidden', shown === false);
+  } catch (err) {
+    console.error('SparkView: inference band failed to render', err);
+  }
 }
 
 function setTitle(title) {

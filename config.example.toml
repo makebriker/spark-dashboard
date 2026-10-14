@@ -64,6 +64,9 @@ metrics = ["decode_tps", "stream_tps", "prefill_tps", "running", "waiting",
            "kv_cache", "ttft", "itl", "prefix_hit"]
 rate_window_s = 10       # rates and latency means are taken over this window
 sparkline = true         # decode-throughput history graph
+# "top":  one full-width band above all node columns (each server labelled
+#         with its node). "node": a card inside the serving node's column.
+placement = "top"
 
 # Up to 4 nodes on one board. "local" is this machine, collected in-process.
 # Any other url is another Spark running this dashboard; the board fetches its

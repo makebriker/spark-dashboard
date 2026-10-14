@@ -74,7 +74,7 @@ def frontend_config(cfg: dict) -> dict:
     return {
         "board": cfg["board"],
         "cards": cfg["cards"],
-        "vllm": {k: cfg["vllm"][k] for k in ("enabled", "metrics", "sparkline")},
+        "vllm": {k: cfg["vllm"][k] for k in ("enabled", "metrics", "sparkline", "placement")},
     }
 
 

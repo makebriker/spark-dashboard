@@ -74,6 +74,9 @@ DEFAULTS: dict = {
         ],
         "rate_window_s": 10,
         "sparkline": True,
+        # "top": one full-width band above the node columns, gathering every
+        # node's servers. "node": a card inside the column of the node serving.
+        "placement": "top",
     },
     # Each node: name + url. "local" is collected in-process; anything else is
     # fetched from that node's own dashboard at <url>/api/metrics.
@@ -111,6 +114,9 @@ def _validate(cfg: dict) -> dict:
         log.warning("vllm.enabled must be \"auto\", true or false, got %r", vllm["enabled"])
         vllm["enabled"] = "auto"
     vllm["rate_window_s"] = max(2, float(vllm["rate_window_s"]))
+    if vllm["placement"] not in ("top", "node"):
+        log.warning("vllm.placement must be 'top' or 'node', got %r", vllm["placement"])
+        vllm["placement"] = "top"
 
     nodes = [n for n in cfg["nodes"] if isinstance(n, dict) and n.get("url")]
     if len(nodes) > MAX_NODES:
