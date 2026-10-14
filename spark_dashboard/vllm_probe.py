@@ -39,14 +39,16 @@ log = logging.getLogger("spark_dashboard.vllm")
 
 DETECT_TTL_S = 30.0
 MODELS_TTL_S = 60.0
-# A busy vLLM API server answers /metrics (~70 KB) slowly -- 0.7 s measured
-# on gb10 mid-generation, 1.3-5.3 s under Flash-Next TP=2 at 93 % GPU
-# (2026-10-14), when 3.0 s reported a serving engine DOWN. This runs in the
-# background sampler, never on a request path, so a generous timeout costs
-# nothing.
-HTTP_TIMEOUT_S = 10.0
-# A failed scrape keeps showing the last good numbers, marked stale, for this
-# long before the server is reported down. One slow answer is not an outage.
+# vLLM's API server stops answering /metrics while it streams a request:
+# measured on gb10 (TP=2, 2026-10-14) one call blocked 20 s and returned the
+# instant the request finished, then took 3 ms. So a scrape takes as long as
+# the longest in-flight request. This runs in the background sampler, never
+# on a request path, so a long timeout costs nothing.
+HTTP_TIMEOUT_S = 30.0
+# After a failed scrape the last good numbers stay up, marked stale, before
+# the server is reported down. A timeout is a busy server (see above), so it
+# gets a long grace; a refused connection means no server is listening.
+STALE_TIMEOUT_MAX_S = 120.0
 STALE_MAX_S = 30.0
 DEFAULT_PORT = 8000
 
@@ -233,7 +235,9 @@ class _Endpoint:
                 log.warning("%s/metrics scrape failed: %s", self.url, out["error"])
             # Keep the window: a timeout is not a restart, and counter resets
             # are detected below when the server answers again.
-            if self.last_ok and time.monotonic() - self.last_ok[0] < STALE_MAX_S:
+            timed_out = isinstance(err, TimeoutError) or isinstance(getattr(err, "reason", None), TimeoutError)
+            grace = STALE_TIMEOUT_MAX_S if timed_out else STALE_MAX_S
+            if self.last_ok and time.monotonic() - self.last_ok[0] < grace:
                 return {**self.last_ok[1], "stale": True, "error": out["error"]}
             return out
         now = time.monotonic()
