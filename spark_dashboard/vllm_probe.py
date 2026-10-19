@@ -3,7 +3,10 @@
 A vLLM OpenAI-compatible server exposes Prometheus metrics at ``/metrics`` on
 its API port. A TensorFold server (``tensorfold serve``) does the same with
 ``tensorfold_*`` names; it is detected alongside vLLM and has no histograms
-and no KV-cache gauge, so waiting / kv_cache / ttft stay empty for it. This module finds those servers, scrapes them, and turns the raw
+and no KV-cache gauge, so kv_cache / ttft / e2e stay empty for it. Its /metrics
+counters move only when a request finishes, so the decode rate comes live from
+its ``/health`` instead, and per-stream speed and prefix hit are held from the
+last completed request(s). This module finds those servers, scrapes them, and turns the raw
 counters and histograms into the numbers worth looking at: decode throughput,
 per-stream decode speed, queue depth, KV-cache use, TTFT, inter-token latency.
 
@@ -55,6 +58,8 @@ HTTP_TIMEOUT_S = 30.0
 STALE_TIMEOUT_MAX_S = 120.0
 STALE_MAX_S = 30.0
 DEFAULT_PORT = 8000
+# Fewest generated tokens a TensorFold completion needs to update per-stream speed.
+TF_MIN_STREAM_TOKENS = 64
 
 # Sample: name{label="v",...} value [timestamp]
 _LINE = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^}]*\})?\s+(\S+)')
@@ -233,6 +238,11 @@ class _Endpoint:
         self.model_at = 0.0
         self.last_ok: tuple[float, dict] | None = None
         self.last_error: str | None = None
+        # TensorFold: /metrics snapshot at the last completion, the per-request
+        # figures computed from it, and when that completion was seen.
+        self.done_base: dict[str, float] | None = None
+        self.done_stats: dict[str, float | None] = {}
+        self.done_at: float | None = None
 
     def _models(self) -> dict | None:
         """/v1/models, cached. 401 under --api-key is fine: the model name
@@ -289,13 +299,55 @@ class _Endpoint:
             if s is not None and c is not None:
                 cur[key + "_sum"], cur[key + "_count"] = s, c
 
+        # TensorFold bumps every /metrics counter only when a request finishes,
+        # and an agent turn decodes for minutes, so a 10 s window of /metrics
+        # alone reads 0 tok/s while it serves. /health counts the tokens of
+        # requests still running, so the live decode rate comes from there. A
+        # failed /health must never fail the scrape.
+        tf = "decode_seconds" in cur
+        streams = None
+        if tf:
+            try:
+                health = json.loads(_http_get(self.url + "/health"))
+                cur["gen_live"] = float(health["completion_tokens_total"])
+                streams = health.get("streams")
+                running_now = health.get("requests_running")
+            except Exception:
+                streams = running_now = None
+
         t0, prev = self._window(now, cur, window_s)
-        # Counters only go down when the server restarted: start over.
-        if any(cur.get(k, 0) < v for k, v in prev.items()):
+        # Counters only go down when the server restarted: start over. A scrape
+        # whose /health failed has no gen_live; that is not a reset.
+        reset = any(cur.get(k, 0) < v for k, v in prev.items() if k in cur or k != "gen_live")
+        if reset:
             self.samples.clear()
             self.samples.append((now, cur))
             t0, prev = now, cur
         dt = now - t0
+
+        if tf:
+            if reset:
+                self.done_base, self.done_stats, self.done_at = cur, {}, None
+            elif self.done_base is None:
+                self.done_base = cur
+            elif cur.get("requests") != self.done_base.get("requests"):
+                def d(key):
+                    if key in cur and key in self.done_base:
+                        return cur[key] - self.done_base[key]
+                    return 0.0
+                d_gen, d_dec, d_hits, d_queries = d("gen_tokens"), d("decode_seconds"), d("prefix_hits"), d("prefix_queries")
+                # TensorFold books prefill time as decode time (its prefill
+                # counter stays 0), so a short reply after a long prompt reads
+                # as ~1 tok/s. Per-stream speed keeps its last value until a
+                # completion has enough tokens to swamp that.
+                stream_tps = self.done_stats.get("stream_tps")
+                if d_gen >= TF_MIN_STREAM_TOKENS and d_dec > 0:
+                    stream_tps = d_gen / d_dec
+                self.done_stats = {
+                    "stream_tps": stream_tps,
+                    "prefix_hit": d_hits / d_queries if d_queries > 0 else None,
+                }
+                self.done_base, self.done_at = cur, now
 
         def delta(key):
             if key in cur and key in prev:
@@ -322,12 +374,26 @@ class _Endpoint:
             stream_tps = max(0.0, gen - (delta("ttft_count") or 0)) / itl_time or None
         elif (tpot := ratio("tpot_req_sum", "tpot_req_count")):
             stream_tps = 1.0 / tpot
-        elif gen is not None and (dec_time := delta("decode_seconds")):
-            stream_tps = gen / dec_time if dec_time > 0 and gen > 0 else None
-        itl = 1.0 / stream_tps if stream_tps else None
+        itl = None
         prefix_hit = ratio("prefix_hits", "prefix_queries")
         if prefix_hit is None and gauges["prefix_hit_v0"] is not None:
             prefix_hit = gauges["prefix_hit_v0"]
+        decode_tps = rate("gen_tokens")
+        if tf:
+            # Held from the last completion: a window of counters that move
+            # only at completion would be empty most of the time.
+            stream_tps = self.done_stats.get("stream_tps")
+            prefix_hit = self.done_stats.get("prefix_hit")
+            live = rate("gen_live")
+            if live is not None:
+                decode_tps = live
+            if streams:
+                busy = (streams.get("decoding") or 0) + (streams.get("prefilling") or 0)
+                gauges["running"] = busy
+                if running_now is not None:
+                    gauges["waiting"] = max(0, running_now - busy)
+        if stream_tps:
+            itl = 1.0 / stream_tps
         model = self._models()
 
         out.update(
@@ -338,7 +404,7 @@ class _Endpoint:
             sample_at=round(time.time(), 1),
             window_s=round(dt, 1),
             metrics={
-                "decode_tps": rate("gen_tokens"),
+                "decode_tps": decode_tps,
                 "stream_tps": stream_tps,
                 "prefill_tps": rate("prompt_tokens"),
                 "running": gauges["running"],
@@ -355,6 +421,9 @@ class _Endpoint:
                 "max_model_len": (model or {}).get("max_model_len") or _cmdline_max_len.get(self.url),
             },
         )
+        if tf:
+            out["last_done_s"] = round(now - self.done_at, 0) if self.done_at is not None else None
+            out["per_request_from"] = "last_completion"
         self.last_ok = (now, out)
         return out
 

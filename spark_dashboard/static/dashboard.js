@@ -327,6 +327,12 @@ function sparkline(points) {
     '<span class="spark-max">peak ' + max.toFixed(0) + ' tok/s</span>';
 }
 
+function fmtAgo(sec) {
+  if (sec < 90) return Math.round(sec) + ' s';
+  if (sec < 5400) return Math.round(sec / 60) + ' min';
+  return Math.round(sec / 3600) + ' h';
+}
+
 function updateVLLM(F, data, _opts, ctx) {
   const v = data.vllm;
   const want = ctx.vllm;
@@ -367,7 +373,9 @@ function updateVLLM(F, data, _opts, ctx) {
       html += '<div class="spark-wrap">' + sparkline(hist.points) + '</div>';
     }
 
-    if (want.metrics.includes('kv_cache')) {
+    // TensorFold has no KV gauge: an empty bar would read as 0 %.
+    const noKv = m.kv_cache == null && s.per_request_from === 'last_completion';
+    if (want.metrics.includes('kv_cache') && !noKv) {
       const kv = m.kv_cache;
       html += '<div class="metric-row"><span class="label">KV cache</span><div class="bar-track">' +
         '<div class="bar-fill ' + barClass(kv || 0) + '" style="width:' + (kv || 0).toFixed(1) + '%"></div></div>' +
@@ -385,7 +393,9 @@ function updateVLLM(F, data, _opts, ctx) {
         '</span><span class="tile-value">' + val + (unit && val !== '—' ? '<small> ' + unit + '</small>' : '') + '</span></div>';
     }
     html += '</div><div class="vllm-foot">' + (s.stale ? '<span class="warn" title="' + esc(s.error) +
-      '">stats delayed, showing last read · </span>' : '') + 'averaged over ' + num(s.window_s, 0) + ' s</div></div></div>';
+      '">stats delayed, showing last read · </span>' : '') + 'averaged over ' + num(s.window_s, 0) + ' s' +
+      (s.per_request_from === 'last_completion' ? ' · per-stream & prefix hit from the last finished request' +
+        (s.last_done_s != null ? ' (' + fmtAgo(s.last_done_s) + ' ago)' : '') : '') + '</div></div></div>';
   });
   F.html('servers', html);
 }

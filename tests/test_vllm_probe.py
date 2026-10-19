@@ -1,3 +1,4 @@
+import json
 import math
 
 import pytest
@@ -51,11 +52,16 @@ class Server:
 
     def __init__(self, monkeypatch):
         self.body = exposition()
+        self.health = None  # TensorFold /health: a dict, or None to refuse
         monkeypatch.setattr(probe, "_http_get", self.get)
 
     def get(self, url):
         if url.endswith("/v1/models"):
             raise OSError("401")
+        if url.endswith("/health"):
+            if self.health is None:
+                raise OSError("no /health")
+            return json.dumps(self.health).encode()
         if isinstance(self.body, Exception):
             raise self.body
         return self.body.encode()
@@ -190,8 +196,98 @@ def test_tensorfold_collect_rates_and_stream_speed(clock, monkeypatch):
     # No histograms or KV gauge on TensorFold: nothing is invented.
     assert m["waiting"] is None and m["kv_cache"] is None and m["ttft"] is None
 
-    clock.advance(10)                                      # idle: decode clock did not move
-    assert ep.collect(10)["metrics"]["stream_tps"] is None
+    # Held from the last completion, not windowed: an idle window keeps it.
+    clock.advance(10)
+    assert ep.collect(10)["metrics"]["stream_tps"] == pytest.approx(250.0)
+
+
+def tf_health(live_tokens, running=1, decoding=1, prefilling=0):
+    return {"ok": True, "requests_running": running, "completion_tokens_total": live_tokens,
+            "streams": {"decoding": decoding, "prefilling": prefilling, "max": 4}}
+
+
+def test_tensorfold_live_decode_rate_from_health_while_metrics_are_flat(clock, monkeypatch):
+    srv = Server(monkeypatch)
+    srv.body = tf_exposition(reqs=5, gen=1000, dec=25)
+    srv.health = tf_health(1000)
+    ep = probe._Endpoint("http://x")
+    ep.collect(10)
+
+    clock.advance(10)                                      # request still running: /metrics flat
+    srv.health = tf_health(1500)
+    m = ep.collect(10)["metrics"]
+    assert m["decode_tps"] == pytest.approx(50.0)
+
+
+def test_tensorfold_per_request_figures_are_held_after_a_completion(clock, monkeypatch):
+    srv = Server(monkeypatch)
+    srv.body = tf_exposition(reqs=5, prompt=5000, cached=0, gen=1000, dec=25)
+    ep = probe._Endpoint("http://x")
+    first = ep.collect(10)
+    assert first["per_request_from"] == "last_completion" and first["last_done_s"] is None
+    assert first["metrics"]["stream_tps"] is None and first["metrics"]["prefix_hit"] is None
+
+    clock.advance(10)
+    srv.body = tf_exposition(reqs=6, prompt=6000, cached=800, gen=1600, dec=27.4)
+    out = ep.collect(10)
+    m = out["metrics"]
+    assert m["stream_tps"] == pytest.approx(250.0)
+    assert m["itl"] == pytest.approx(1 / 250)
+    assert m["prefix_hit"] == pytest.approx(80.0)
+    assert out["last_done_s"] == 0
+
+    clock.advance(30)                                      # nothing finished since
+    out = ep.collect(10)
+    m = out["metrics"]
+    assert m["stream_tps"] == pytest.approx(250.0) and m["prefix_hit"] == pytest.approx(80.0)
+    assert out["last_done_s"] == 30
+    clock.advance(30)
+    assert ep.collect(10)["last_done_s"] == 60
+
+    # A short reply after a long prompt: its decode-seconds include prefill,
+    # so it leaves per-stream speed alone but still updates the prefix hit.
+    srv.body = tf_exposition(reqs=7, prompt=7000, cached=1700, gen=1620, dec=30.4)
+    clock.advance(5)
+    m = ep.collect(10)["metrics"]
+    assert m["stream_tps"] == pytest.approx(250.0) and m["prefix_hit"] == pytest.approx(90.0)
+
+    srv.body = tf_exposition(reqs=1, gen=10, dec=1)        # restart: held figures are dropped
+    clock.advance(5)
+    out = ep.collect(10)
+    assert out["metrics"]["stream_tps"] is None and out["last_done_s"] is None
+
+
+def test_tensorfold_health_failure_does_not_break_the_scrape(clock, monkeypatch):
+    srv = Server(monkeypatch)
+    srv.body = tf_exposition(reqs=5, gen=1000, dec=25)
+    srv.health = tf_health(1000)
+    ep = probe._Endpoint("http://x")
+    ep.collect(10)
+
+    clock.advance(5)
+    srv.body = tf_exposition(reqs=6, gen=1250, dec=26)
+    srv.health = None                                      # /health refuses
+    out = ep.collect(10)
+    assert out["ok"] and out["metrics"]["decode_tps"] == pytest.approx(50.0)  # /metrics rate
+    assert out["metrics"]["running"] == 2                  # gauge, not streams
+
+    clock.advance(5)                                       # /health back: no false counter reset
+    srv.body = tf_exposition(reqs=6, gen=1250, dec=26)
+    srv.health = tf_health(1500)
+    out = ep.collect(10)
+    assert out["ok"] and out["window_s"] == 10 and out["metrics"]["stream_tps"] == pytest.approx(250.0)
+
+
+def test_tensorfold_running_and_waiting_come_from_health_streams(clock, monkeypatch):
+    srv = Server(monkeypatch)
+    srv.body = tf_exposition(reqs=5, gen=1000, dec=25)
+    srv.health = tf_health(1000, running=6, decoding=3, prefilling=1)
+    m = probe._Endpoint("http://x").collect(10)["metrics"]
+    assert m["running"] == 4 and m["waiting"] == 2         # gauge says 2, streams win
+
+    srv.health = {"ok": True, "requests_running": 1, "completion_tokens_total": 1000}   # no streams
+    m = probe._Endpoint("http://x").collect(10)["metrics"]
+    assert m["running"] == 2 and m["waiting"] is None
 
 
 def test_tensorfold_labels_parse():
