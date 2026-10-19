@@ -1,19 +1,23 @@
-"""vLLM detection and inference metrics.
+"""vLLM and TensorFold detection and inference metrics.
 
 A vLLM OpenAI-compatible server exposes Prometheus metrics at ``/metrics`` on
-its API port. This module finds those servers, scrapes them, and turns the raw
+its API port. A TensorFold server (``tensorfold serve``) does the same with
+``tensorfold_*`` names; it is detected alongside vLLM and has no histograms
+and no KV-cache gauge, so waiting / kv_cache / ttft stay empty for it. This module finds those servers, scrapes them, and turns the raw
 counters and histograms into the numbers worth looking at: decode throughput,
 per-stream decode speed, queue depth, KV-cache use, TTFT, inter-token latency.
 
 Detection: every ``DETECT_TTL_S`` the process table is scanned for a vLLM API
-server (``vllm serve ...`` or ``-m vllm.entrypoints.openai.api_server``) and
-its ``--port`` is read off the command line (default 8000). Container processes
+server (``vllm serve ...`` or ``-m vllm.entrypoints.openai.api_server``) or a
+TensorFold server (``python -m tensorfold serve ...`` or ``tensorfold serve
+...``, rank 0 only) and its ``--port`` is read off the command line (default
+8000). Container processes
 are visible in the host's process table, so a dockerised server is found too —
 as long as the port is the same on the host (``--network host`` or ``-p N:N``).
 Anything more exotic: list the URL under ``[vllm] endpoints``.
 
-In a multi-node deployment (tensor-parallel over Ray) only the head node runs
-the API server, so only the head node's board shows the vLLM card.
+In a multi-node deployment (tensor-parallel over Ray, or TensorFold ``--rank``
+> 0) only the head node runs the API server, so only the head node's board shows the vLLM card.
 
 Rates are computed over a sliding window of samples kept here, not between
 consecutive requests, so two browsers polling the same board don't halve each
@@ -61,15 +65,27 @@ _LABEL = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
 _MEAN_GAUGES = {"vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc", "vllm:gpu_prefix_cache_hit_rate"}
 
 _COUNTERS = {
-    "gen_tokens": ("vllm:generation_tokens_total",),
-    "prompt_tokens": ("vllm:prompt_tokens_total",),
-    "requests": ("vllm:request_success_total",),
+    "gen_tokens": ("vllm:generation_tokens_total", "tensorfold_completion_tokens_total"),
+    "prompt_tokens": ("vllm:prompt_tokens_total", "tensorfold_prompt_tokens_total"),
+    "requests": ("vllm:request_success_total", "tensorfold_requests_total"),
     "preemptions": ("vllm:num_preemptions_total",),
-    "prefix_hits": ("vllm:prefix_cache_hits_total", "vllm:prefix_cache_hits"),
-    "prefix_queries": ("vllm:prefix_cache_queries_total", "vllm:prefix_cache_queries"),
+    # TensorFold: cached prompt tokens over prompt tokens (vLLM's queries
+    # counter is in prompt tokens too).
+    "prefix_hits": ("vllm:prefix_cache_hits_total", "vllm:prefix_cache_hits", "tensorfold_cached_tokens_total"),
+    "prefix_queries": (
+        "vllm:prefix_cache_queries_total",
+        "vllm:prefix_cache_queries",
+        "tensorfold_prompt_tokens_total",
+    ),
     "spec_accepted": ("vllm:spec_decode_num_accepted_tokens_total",),
     "spec_draft": ("vllm:spec_decode_num_draft_tokens_total",),
     "spec_drafts": ("vllm:spec_decode_num_drafts_total",),
+    # TensorFold: decode-seconds summed over requests, so completion tokens per
+    # decode-second is per-stream speed (verified 2026-10-19: 600 tokens / 13.2 s =
+    # 45 tok/s). decode_rounds_total is NOT tokens (17463 rounds for those 600).
+    # All tensorfold_* counters move only when a request completes, so on that
+    # server every rate here jumps at completion instead of streaming.
+    "decode_seconds": ("tensorfold_decode_seconds_total",),
 }
 
 _HISTOGRAMS = {
@@ -86,7 +102,7 @@ _HISTOGRAMS = {
 }
 
 _GAUGES = {
-    "running": ("vllm:num_requests_running",),
+    "running": ("vllm:num_requests_running", "tensorfold_requests_inflight"),
     "waiting": ("vllm:num_requests_waiting",),
     "kv_cache": ("vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc"),
     "prefix_hit_v0": ("vllm:gpu_prefix_cache_hit_rate",),
@@ -96,8 +112,9 @@ _GAUGES = {
 def parse_prometheus(text: str) -> tuple[dict[str, float], dict[str, str]]:
     """Collapse exposition text to {metric: value}, merging label sets.
 
-    Also returns the labels seen on the first vllm sample, which is where the
-    served model name lives (``model_name="..."``).
+    Also returns the labels seen on the first vllm / tensorfold sample, which is
+    where the served model name lives (``model_name="..."`` for vLLM,
+    ``model="..."`` for TensorFold).
     """
     sums: dict[str, float] = {}
     counts: dict[str, int] = {}
@@ -117,7 +134,7 @@ def parse_prometheus(text: str) -> tuple[dict[str, float], dict[str, str]]:
             continue
         if val != val:  # NaN
             continue
-        if lbl and not labels and name.startswith("vllm:"):
+        if lbl and not labels and name.startswith(("vllm:", "tensorfold_")):
             labels = dict(_LABEL.findall(lbl))
         sums[name] = sums.get(name, 0.0) + val
         counts[name] = counts.get(name, 0) + 1
@@ -153,6 +170,21 @@ def _port_from_cmdline(cmd: list[str]) -> int:
     return int(port) if port else DEFAULT_PORT
 
 
+def _is_tensorfold_server(cmd: list[str]) -> bool:
+    # `serve --rank N` runs on every node; only rank 0 has the API port.
+    rank = _arg(cmd, "--rank")
+    if rank is not None and rank != "0":
+        return False
+    for i, arg in enumerate(cmd[:-1]):
+        if cmd[i + 1] != "serve":
+            continue
+        if arg.rsplit("/", 1)[-1] == "tensorfold":
+            return True
+        if arg == "tensorfold" and i > 0 and cmd[i - 1] == "-m":
+            return True
+    return False
+
+
 def _is_vllm_server(cmd: list[str]) -> bool:
     # Multi-node (--nnodes N): ranks > 0 run `vllm serve ... --headless` and
     # open no API port. Their numbers are reported by the rank-0 node.
@@ -181,9 +213,10 @@ def detect_endpoints() -> list[str]:
         if not cmd:
             continue
         try:
-            if _is_vllm_server(cmd):
+            vllm, tf = _is_vllm_server(cmd), _is_tensorfold_server(cmd)
+            if vllm or tf:
                 url = f"http://127.0.0.1:{_port_from_cmdline(cmd)}"
-                max_len = _arg(cmd, "--max-model-len")
+                max_len = _arg(cmd, "--max-model-len" if vllm else "--context")
                 found[url] = int(max_len) if max_len and max_len.isdigit() else found.get(url)
         except ValueError:
             continue
@@ -289,6 +322,8 @@ class _Endpoint:
             stream_tps = max(0.0, gen - (delta("ttft_count") or 0)) / itl_time or None
         elif (tpot := ratio("tpot_req_sum", "tpot_req_count")):
             stream_tps = 1.0 / tpot
+        elif gen is not None and (dec_time := delta("decode_seconds")):
+            stream_tps = gen / dec_time if dec_time > 0 and gen > 0 else None
         itl = 1.0 / stream_tps if stream_tps else None
         prefix_hit = ratio("prefix_hits", "prefix_queries")
         if prefix_hit is None and gauges["prefix_hit_v0"] is not None:
@@ -297,7 +332,7 @@ class _Endpoint:
 
         out.update(
             ok=True,
-            model=labels.get("model_name") or (model or {}).get("id"),
+            model=labels.get("model_name") or labels.get("model") or (model or {}).get("id"),
             # Identifies this sample: the board pushes one sparkline point per
             # new value, not per browser tick.
             sample_at=round(time.time(), 1),

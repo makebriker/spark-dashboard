@@ -99,6 +99,10 @@ For tensor-parallel deployments over Ray only the head node runs the API server,
 only its column shows the card. Rates and latency means are taken over a sliding
 `rate_window_s` window; idle values show as `—`.
 
+A TensorFold server (`tensorfold serve ...`, rank 0 only; `--port` and `--context` read
+the same way) is detected too. It exposes no histograms or KV-cache gauge, so waiting,
+KV cache and TTFT show as `—`; per-stream speed is decode rounds per decode-second.
+
 ## Deploy configuration
 
 | Variable | Default | Description |

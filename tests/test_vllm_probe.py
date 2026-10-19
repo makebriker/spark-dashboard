@@ -109,3 +109,92 @@ def test_timeout_keeps_last_values_long_but_refused_connection_does_not(clock, m
     assert ep.collect(10)["stale"]
     clock.advance(2)
     assert ep.collect(10)["ok"] is False
+
+
+TF_CMD = (
+    "python -m tensorfold serve /model --tp 2 --rank 0 --master 192.168.100.20 "
+    "--master-port 29571 --context 262144 --parallel 4 --kv-dtype fp8 "
+    "--no-update-check --host 127.0.0.1 --port 8000 --name DeepSeek-V4.1-Flash-TF"
+).split()
+
+TF_EXPOSITION = """\
+# HELP tensorfold_requests_total Requests
+# TYPE tensorfold_requests_total counter
+tensorfold_requests_total{{model="DeepSeek-V4.1-Flash-TF"}} {reqs}
+tensorfold_request_errors_total{{model="DeepSeek-V4.1-Flash-TF"}} 0
+tensorfold_prompt_tokens_total{{model="DeepSeek-V4.1-Flash-TF"}} {prompt}
+tensorfold_cached_tokens_total{{model="DeepSeek-V4.1-Flash-TF"}} {cached}
+tensorfold_completion_tokens_total{{model="DeepSeek-V4.1-Flash-TF"}} {gen}
+tensorfold_decode_rounds_total{{model="DeepSeek-V4.1-Flash-TF"}} {rounds}
+tensorfold_decode_seconds_total{{model="DeepSeek-V4.1-Flash-TF"}} {dec}
+tensorfold_prefill_seconds_total{{model="DeepSeek-V4.1-Flash-TF"}} 0
+tensorfold_requests_inflight{{model="DeepSeek-V4.1-Flash-TF"}} 2
+tensorfold_engine_fatal{{model="DeepSeek-V4.1-Flash-TF"}} 0
+tensorfold_uptime_seconds{{model="DeepSeek-V4.1-Flash-TF"}} 908.6
+"""
+
+
+def tf_exposition(reqs=0, prompt=0, cached=0, gen=0, rounds=0, dec=0):
+    return TF_EXPOSITION.format(reqs=reqs, prompt=prompt, cached=cached, gen=gen, rounds=rounds, dec=dec)
+
+
+def test_tensorfold_detection_from_cmdline(monkeypatch):
+    assert probe._is_tensorfold_server(TF_CMD)
+    assert not probe._is_vllm_server(TF_CMD)
+    assert probe._port_from_cmdline(TF_CMD) == 8000
+    # Rank 1 runs on the other node and opens no API port.
+    rank1 = [("1" if a == "0" and TF_CMD[i - 1] == "--rank" else a) for i, a in enumerate(TF_CMD)]
+    assert "1" in rank1 and not probe._is_tensorfold_server(rank1)
+    # Installed console script, with and without a full path.
+    assert probe._is_tensorfold_server(["tensorfold", "serve", "/model", "--port", "8123"])
+    assert probe._is_tensorfold_server(["/home/lesha/.venv/bin/tensorfold", "serve", "/model"])
+    assert not probe._is_tensorfold_server(["tensorfold", "version"])
+    assert not probe._is_tensorfold_server(["python", "-m", "http.server", "serve"])
+
+    class Proc:
+        def __init__(self, cmd):
+            self.info = {"cmdline": cmd}
+
+    monkeypatch.setattr(probe.psutil, "process_iter", lambda attrs: [Proc(TF_CMD), Proc(rank1)], raising=False)
+    assert probe.detect_endpoints() == ["http://127.0.0.1:8000"]
+    assert probe._cmdline_max_len == {"http://127.0.0.1:8000": 262144}
+
+
+def test_vllm_detection_still_reads_max_model_len(monkeypatch):
+    class Proc:
+        info = {"cmdline": ["vllm", "serve", "x", "--port", "8888", "--max-model-len", "4096"]}
+
+    monkeypatch.setattr(probe.psutil, "process_iter", lambda attrs: [Proc()], raising=False)
+    assert probe.detect_endpoints() == ["http://127.0.0.1:8888"]
+    assert probe._cmdline_max_len == {"http://127.0.0.1:8888": 4096}
+
+
+def test_tensorfold_collect_rates_and_stream_speed(clock, monkeypatch):
+    srv = Server(monkeypatch)
+    srv.body = tf_exposition(reqs=17, prompt=1000, cached=0, gen=1000, rounds=4000, dec=25)
+    ep = probe._Endpoint("http://x")
+    assert ep.collect(10)["metrics"]["decode_tps"] is None
+
+    clock.advance(10)
+    srv.body = tf_exposition(reqs=19, prompt=1400, cached=100, gen=1500, rounds=4300, dec=27)
+    out = ep.collect(10)
+    m = out["metrics"]
+    assert out["ok"] and out["model"] == "DeepSeek-V4.1-Flash-TF"
+    assert m["decode_tps"] == pytest.approx(50.0)
+    assert m["prefill_tps"] == pytest.approx(40.0)
+    assert m["running"] == 2
+    assert m["prefix_hit"] == pytest.approx(25.0)          # 100 cached / 400 prompt tokens
+    assert m["req_rate"] == pytest.approx(0.2)
+    assert m["stream_tps"] == pytest.approx(250.0)         # 500 tokens / 2 decode-seconds
+    assert m["itl"] == pytest.approx(1 / 250)
+    # No histograms or KV gauge on TensorFold: nothing is invented.
+    assert m["waiting"] is None and m["kv_cache"] is None and m["ttft"] is None
+
+    clock.advance(10)                                      # idle: decode clock did not move
+    assert ep.collect(10)["metrics"]["stream_tps"] is None
+
+
+def test_tensorfold_labels_parse():
+    values, labels = probe.parse_prometheus(tf_exposition(gen=7))
+    assert labels == {"model": "DeepSeek-V4.1-Flash-TF"}
+    assert values["tensorfold_completion_tokens_total"] == 7
