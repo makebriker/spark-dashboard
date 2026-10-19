@@ -373,9 +373,13 @@ function updateVLLM(F, data, _opts, ctx) {
       html += '<div class="spark-wrap">' + sparkline(hist.points) + '</div>';
     }
 
-    // TensorFold has no KV gauge: an empty bar would read as 0 %.
-    const noKv = m.kv_cache == null && s.per_request_from === 'last_completion';
-    if (want.metrics.includes('kv_cache') && !noKv) {
+    // Metrics the server does not export at all read "n/a", not an empty value.
+    const unreported = new Set(s.unreported || []);
+    const NA = '<span class="muted" title="Not reported by this server">n/a</span>';
+    if (want.metrics.includes('kv_cache') && unreported.has('kv_cache')) {
+      html += '<div class="metric-row"><span class="label">KV cache</span>' +
+        '<span class="muted">not reported by TensorFold</span></div>';
+    } else if (want.metrics.includes('kv_cache')) {
       const kv = m.kv_cache;
       html += '<div class="metric-row"><span class="label">KV cache</span><div class="bar-track">' +
         '<div class="bar-fill ' + barClass(kv || 0) + '" style="width:' + (kv || 0).toFixed(1) + '%"></div></div>' +
@@ -388,9 +392,9 @@ function updateVLLM(F, data, _opts, ctx) {
       const t = VLLM_TILES[key];
       if (!t) continue;
       const [label, f, unit] = t;
-      const val = f(m[key]);
+      const val = unreported.has(key) ? NA : f(m[key]);
       html += '<div class="tile' + (key === 'decode_tps' ? ' tile-hero' : '') + '"><span class="tile-label">' + label +
-        '</span><span class="tile-value">' + val + (unit && val !== '—' ? '<small> ' + unit + '</small>' : '') + '</span></div>';
+        '</span><span class="tile-value">' + val + (unit && val !== '—' && val !== NA ? '<small> ' + unit + '</small>' : '') + '</span></div>';
     }
     html += '</div><div class="vllm-foot">' + (s.stale ? '<span class="warn" title="' + esc(s.error) +
       '">stats delayed, showing last read · </span>' : '') + 'averaged over ' + num(s.window_s, 0) + ' s' +

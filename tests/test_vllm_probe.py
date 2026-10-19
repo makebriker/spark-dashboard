@@ -225,6 +225,7 @@ def test_tensorfold_per_request_figures_are_held_after_a_completion(clock, monke
     ep = probe._Endpoint("http://x")
     first = ep.collect(10)
     assert first["per_request_from"] == "last_completion" and first["last_done_s"] is None
+    assert {"kv_cache", "spec_accept", "spec_len"} <= set(first["unreported"])
     assert first["metrics"]["stream_tps"] is None and first["metrics"]["prefix_hit"] is None
 
     clock.advance(10)

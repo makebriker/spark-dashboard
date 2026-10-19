@@ -60,6 +60,8 @@ STALE_MAX_S = 30.0
 DEFAULT_PORT = 8000
 # Fewest generated tokens a TensorFold completion needs to update per-stream speed.
 TF_MIN_STREAM_TOKENS = 64
+# Metrics TensorFold does not export in any form.
+TF_UNREPORTED = ("kv_cache", "ttft", "e2e", "spec_accept", "spec_len", "preemptions")
 
 # Sample: name{label="v",...} value [timestamp]
 _LINE = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^}]*\})?\s+(\S+)')
@@ -424,6 +426,10 @@ class _Endpoint:
         if tf:
             out["last_done_s"] = round(now - self.done_at, 0) if self.done_at is not None else None
             out["per_request_from"] = "last_completion"
+            # Not exported at all (drafted/accepted stay 0 with DSpark on, and
+            # decode_rounds sums a global round counter): the board says so
+            # instead of showing an empty value.
+            out["unreported"] = list(TF_UNREPORTED)
         self.last_ok = (now, out)
         return out
 
