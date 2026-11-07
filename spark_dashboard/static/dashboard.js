@@ -431,6 +431,15 @@ function comfyLastJob(job) {
   return parts.join(' · ');
 }
 
+function comfyStep(step) {
+  if (!step) return '';
+  const pct = step.value / step.max * 100;
+  const label = step.node_type || 'Step';
+  return '<div class="metric-row comfy-step"><span class="label" title="' + esc(label) + '">' + esc(label) + '</span>' +
+    '<div class="bar-track"><div class="bar-fill green" style="width:' + Math.min(100, pct).toFixed(1) + '%"></div></div>' +
+    '<span class="value">' + esc(step.value) + ' / ' + esc(step.max) + '</span></div>';
+}
+
 function updateComfy(F, data, _opts, ctx) {
   if (ctx.comfyui.enabled === false) return false;
   const servers = data.comfyui ? data.comfyui.servers : [];
@@ -450,13 +459,14 @@ function updateComfy(F, data, _opts, ctx) {
       '"><span class="tile-label">' + label + '</span><span class="tile-value">' + value + '</span></div>';
     return '<div class="comfy-server"><div class="vllm-head"><span class="net-state ' + state[0] + '">' + state[1] +
       '</span><span class="vllm-model" title="' + esc(s.endpoint) + '">' + esc(s.model || s.endpoint) + '</span>' +
-      (s.node ? '<span class="vllm-node">on ' + esc(s.node) + '</span>' : '') + '</div>' +
+      (s.node ? '<span class="vllm-node">on ' + esc(s.node) + '</span>' : '') + '</div>' + comfyStep(s.progress) +
       '<div class="tiles">' + tile('Queued', s.pending, true) + tile('Running', s.running) +
       tile('Elapsed', fmtElapsed(s.job_elapsed_s)) +
       tile('Last job', '<span class="' + cls + '">' + esc(word) + '</span>' +
         (last && last.duration_s != null ? '<small> ' + fmtElapsed(last.duration_s) + '</small>' : '')) +
       '</div><div class="vllm-foot">' + (s.stale ? '<span class="warn" title="' + esc(s.error) +
-      '">stats delayed, showing last read · </span>' : '') + esc(comfyLastJob(last)) + '</div></div>';
+      '">stats delayed, showing last read · </span>' : '') + (s.progress_private ? 'step progress goes only to the client that submitted this job · ' : '') +
+      esc(comfyLastJob(last)) + '</div></div>';
   }).join(''));
 }
 

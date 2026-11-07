@@ -436,6 +436,8 @@ header {
 }
 .comfy-server + .comfy-server { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--sep); }
 .comfy-server .tile-value small { white-space: nowrap; }
+.comfy-step { margin-bottom: 8px; }
+.comfy-step .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .comfy-server .tile-value .green { color: var(--green); }
 .comfy-server .tile-value .yellow { color: var(--yellow); }
 .comfy-server .tile-value .red { color: var(--red); }

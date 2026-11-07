@@ -18,7 +18,8 @@ Web dashboard for the NVIDIA Grace Blackwell GB10 (ASUS GX10) that exposes Spark
   KV-cache use, TTFT, time per output token, prefix-cache hit rate and more, with a
   decode-throughput sparkline
 - **ComfyUI** — detected automatically when ComfyUI runs on the node: running and
-  queued jobs, the current job's model and elapsed time, and the last job's result
+  queued jobs, step progress, the current job's model and elapsed time, and the last
+  job's result
 - **Multi-node** — up to 4 Sparks on one board, side by side or stacked
 - **Configurable** — which cards appear, in what order, per-card filters, which vLLM
   numbers to show — from one TOML file, applied live without a restart
@@ -113,10 +114,14 @@ path or working directory), takes `--port` from the command line (default 8188),
 `http://127.0.0.1:<port>/queue` every `scrape_interval_s`. Anything else: list the URL
 under `endpoints`.
 
-The block shows running and queued jobs, the running job's model and elapsed time, and
-the last finished job. Elapsed time counts from the first scrape that saw the job
-running. There is no step progress, because ComfyUI publishes it only on its WebSocket,
-not over HTTP.
+The block shows running and queued jobs, a step bar, the running job's model and elapsed
+time, and the last finished job. Elapsed time counts from the first scrape that saw the
+job running.
+
+Step progress comes from one WebSocket per server at `ws://127.0.0.1:<port>/ws`, which
+needs the `websockets` package. ComfyUI broadcasts progress only for jobs submitted
+without a `client_id`. A job that has one, such as a job from the ComfyUI web page,
+shows no step bar, and the block says so.
 
 ### Top blocks
 
@@ -156,6 +161,7 @@ GB10s and on vLLM is the same for one viewer or fifty:
 | local sampler | `board.refresh_ms` | this host's hardware (GB10s only) |
 | vLLM sampler | `vllm.scrape_interval_s` (5 s) | one `/metrics` scrape per server |
 | ComfyUI sampler | `comfyui.scrape_interval_s` (3 s) | one `/queue` read per server |
+| ComfyUI reader | continuous | one WebSocket per server, for step progress |
 | board poller | `board.refresh_ms` | every configured node's `/api/metrics` |
 
 A missed poll or a slow vLLM answer keeps the last good data, marked delayed,

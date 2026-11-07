@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 
 import pytest
 
@@ -37,6 +39,7 @@ class Server:
         self.history = history()
         self.history_reads = 0
         monkeypatch.setattr(probe, "_http_get", self.get)
+        monkeypatch.setattr(probe._Progress, "start", lambda _self: None)
 
     def get(self, url):
         if url.endswith("/queue"):
@@ -198,6 +201,149 @@ def test_timeout_gets_the_longer_grace(server, clock):
 def test_answer_that_is_not_a_queue_counts_as_failed(server, clock):
     server.queue = {"detail": "not found"}
     assert not probe._Endpoint("http://x").collect()["ok"]
+
+
+def step(prompt_id="a", node="4", value=12, total=30):
+    return {"type": "progress", "data": {"value": value, "max": total, "prompt_id": prompt_id, "node": node}}
+
+
+def test_progress_names_the_node_from_the_graph():
+    progress = probe._Progress("http://x:8188")
+    assert progress.ws_url == "ws://x:8188/ws"
+    progress.feed(step())
+    assert progress.for_job("a", GRAPH) == {"value": 12, "max": 30, "node_type": "KSampler"}
+
+
+def test_progress_of_another_job_is_ignored():
+    progress = probe._Progress("http://x")
+    progress.feed(step(prompt_id="old"))
+    assert progress.for_job("a", GRAPH) is None
+
+
+def node_state(node, state):
+    return {"type": "progress_state", "data": {"prompt_id": "a", "nodes": {node: {"state": state}}}}
+
+
+def test_step_stays_while_its_node_runs_and_ignores_other_nodes():
+    progress = probe._Progress("http://x")
+    progress.feed(step())
+    progress.feed(node_state("4", "running"))
+    progress.feed(node_state("9", "finished"))
+    assert progress.for_job("a", GRAPH)
+
+
+@pytest.mark.parametrize("state", ["finished", "error"])
+def test_step_clears_when_its_node_ends(state):
+    progress = probe._Progress("http://x")
+    progress.feed(step())
+    progress.feed(node_state("4", state))
+    assert progress.latest is None
+
+
+def test_monitor_frames_and_bad_steps_are_ignored():
+    progress = probe._Progress("http://x")
+    progress.feed({"type": "crystools.monitor", "data": {"cpu_utilization": 1}})
+    progress.feed({"type": "status"})
+    assert progress.latest is None
+    progress.feed(step(total=0))
+    assert progress.for_job("a", GRAPH) is None
+
+
+def test_node_missing_from_the_graph_has_no_type():
+    progress = probe._Progress("http://x")
+    progress.feed(step(node="12:3"))
+    assert progress.for_job("a", GRAPH)["node_type"] is None
+
+
+def test_collect_adds_the_step_of_the_running_job(server, clock):
+    ep = probe._Endpoint("http://x")
+    server.queue = {"queue_running": [job("a")], "queue_pending": []}
+    ep.progress.feed(step())
+    out = ep.collect()
+    assert out["progress"]["value"] == 12
+    assert out["progress_private"] is False
+
+
+def test_job_with_a_client_id_is_marked_private(server, clock):
+    item = job("a")
+    item[3]["client_id"] = "browser"
+    server.queue = {"queue_running": [item], "queue_pending": []}
+    out = probe._Endpoint("http://x").collect()
+    assert out["progress"] is None and out["progress_private"] is True
+
+
+def test_null_client_id_is_not_private(server, clock):
+    # ComfyUI broadcasts progress when client_id is null.
+    item = job("a")
+    item[3]["client_id"] = None
+    server.queue = {"queue_running": [item], "queue_pending": []}
+    assert probe._Endpoint("http://x").collect()["progress_private"] is False
+
+
+@pytest.mark.parametrize("value, total", [(1, float("nan")), (float("inf"), 30), (1, float("inf")), (True, 30)])
+def test_non_finite_steps_are_dropped(value, total):
+    progress = probe._Progress("http://x")
+    progress.feed(step(value=value, total=total))
+    assert progress.for_job("a", GRAPH) is None
+
+
+def test_stale_answer_keeps_the_step_moving(server, clock):
+    ep = probe._Endpoint("http://x")
+    server.queue = {"queue_running": [job("a")], "queue_pending": []}
+    ep.progress.feed(step(value=3))
+    ep.collect()
+    server.queue = TimeoutError("busy")
+    ep.progress.feed(step(value=9))
+    out = ep.collect()
+    assert out["stale"] and out["progress"]["value"] == 9
+
+
+def test_disabling_closes_every_reader(server, monkeypatch):
+    ep = probe._Endpoint("http://x")
+    monkeypatch.setattr(probe, "_endpoints", {"http://x": ep})
+    probe._collect_all({"enabled": False, "endpoints": []})
+    assert probe._endpoints == {}
+    assert ep.progress.stop.is_set()
+
+
+def test_removed_endpoint_stops_its_reader(server, monkeypatch):
+    ep = probe._Endpoint("http://x")
+    monkeypatch.setattr(probe, "_endpoints", {"http://x": ep})
+    probe._collect_all({"enabled": True, "endpoints": ["http://y"]})
+    assert "http://x" not in probe._endpoints
+    assert ep.progress.stop.is_set()
+
+
+def test_reader_takes_steps_skips_binary_and_clears_on_disconnect():
+    server_mod = pytest.importorskip("websockets.sync.server")
+    seen = threading.Event()
+
+    def handler(ws):
+        ws.send(b"\x00\x00\x00\x01preview")
+        ws.send(json.dumps({"type": "crystools.monitor", "data": {}}))
+        ws.send(json.dumps(step()))
+        seen.wait(5)
+
+    with server_mod.serve(handler, "127.0.0.1", 0) as ws_server:
+        port = ws_server.socket.getsockname()[1]
+        threading.Thread(target=ws_server.serve_forever, daemon=True).start()
+        progress = probe._Progress(f"http://127.0.0.1:{port}")
+        progress.start()
+        try:
+            deadline = time.monotonic() + 5
+            while progress.latest is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert progress.for_job("a", GRAPH)["value"] == 12
+            seen.set()
+            deadline = time.monotonic() + 5
+            while progress.latest is not None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert progress.latest is None
+        finally:
+            progress.close()
+            ws_server.shutdown()
+        progress.thread.join(5)
+        assert not progress.thread.is_alive()
 
 
 def test_disabled_never_probes(monkeypatch):

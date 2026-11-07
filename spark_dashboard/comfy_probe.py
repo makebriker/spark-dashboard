@@ -15,15 +15,22 @@ time counts from the first scrape that saw it running: up to one scrape short,
 and it restarts if this dashboard does. /api/jobs is avoided because it walks
 and normalises the whole history on every call.
 
-Step progress is not read here: it exists only on ComfyUI's WebSocket, sent to
-the submitting client if the job has a client_id and to every socket if not.
+Step progress exists only on ComfyUI's WebSocket, sent to the submitting client
+if the job has a client_id and to every socket if not. ``_Progress`` listens as
+one more client, so it sees jobs without a client_id; every job in both nodes'
+history had none on 2026-11-07. A job with a client_id stays private on purpose:
+reusing that id would replace the submitter's socket (server.py, /ws).
 
-stdlib only, like vllm_probe.
+ComfyUI writes to its sockets one after another, so a client that stops reading
+could slow it down. _Progress therefore has a thread that only reads, and takes
+no lock the scrape loop holds. Its import is lazy: without the websockets package
+a node loses step progress, not its metrics.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import logging
 import threading
 import time
@@ -43,6 +50,7 @@ HISTORY_TTL_S = 30.0
 # A timeout may just be a busy render; a refused connection means no server.
 STALE_TIMEOUT_MAX_S = 120.0
 STALE_MAX_S = 30.0
+PROGRESS_RECONNECT_S = 5.0
 DEFAULT_PORT = 8188
 ERROR_MAX_CHARS = 160
 # Loader inputs that name a job's main model. LoRA, CLIP and VAE are left out.
@@ -133,13 +141,100 @@ def parse_last_job(history: dict) -> dict | None:
     return job
 
 
+def _finite(x) -> bool:
+    # json.loads accepts NaN/Infinity, which JSONResponse then refuses.
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
+class _Progress:
+    """Latest step of the running job, kept current by one WebSocket reader."""
+
+    def __init__(self, url: str):
+        self.ws_url = url.replace("http", "ws", 1) + "/ws"
+        self.latest: dict | None = None
+        self.last_error: str | None = None
+        self.stop = threading.Event()
+        self.ws = None
+        self.thread: threading.Thread | None = None
+
+    def feed(self, message: dict) -> None:
+        kind, data = message.get("type"), message.get("data")
+        if not isinstance(data, dict):
+            return
+        if kind == "progress":
+            self.latest = data
+        elif kind == "progress_state" and self.latest:
+            # "executing" and "execution_success" are not sent for a job without
+            # a client_id, so this is the only sign that the step's node ended.
+            nodes = data.get("nodes")
+            node = nodes.get(self.latest.get("node")) if isinstance(nodes, dict) else None
+            if isinstance(node, dict) and node.get("state") != "running":
+                self.latest = None
+
+    def for_job(self, prompt_id: str, graph) -> dict | None:
+        step = self.latest
+        if not step or step.get("prompt_id") != prompt_id:
+            return None
+        value, total = step.get("value"), step.get("max")
+        if not _finite(value) or not _finite(total) or total <= 0:
+            return None
+        node = graph.get(step.get("node")) if isinstance(graph, dict) else None
+        return {"value": value, "max": total, "node_type": node.get("class_type") if isinstance(node, dict) else None}
+
+    def _read(self, connect) -> None:
+        with connect(self.ws_url, open_timeout=HTTP_TIMEOUT_S, close_timeout=1,
+                     max_size=None, compression=None, proxy=None) as ws:
+            self.ws = ws
+            if self.stop.is_set():  # closed while connecting
+                return
+            if self.last_error:
+                log.warning("%s recovered", self.ws_url)
+                self.last_error = None
+            for message in ws:
+                if isinstance(message, str):  # bytes are preview images
+                    self.feed(json.loads(message))
+
+    def _run(self) -> None:
+        try:
+            from websockets.sync.client import connect
+        except ImportError as err:
+            log.warning("no ComfyUI step progress: %s", err)
+            return
+        while not self.stop.is_set():
+            try:
+                self._read(connect)
+            except Exception as err:
+                error = f"{type(err).__name__}: {err}"
+                if error != self.last_error:
+                    self.last_error = error
+                    log.warning("%s failed: %s", self.ws_url, error)
+            self.latest = None
+            self.stop.wait(PROGRESS_RECONNECT_S)
+
+    def start(self) -> None:
+        if self.thread is None:
+            self.thread = threading.Thread(target=self._run, name=f"comfy-ws {self.ws_url}", daemon=True)
+            self.thread.start()
+
+    def close(self) -> None:
+        self.stop.set()
+        ws = self.ws
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception as err:
+                log.warning("%s close failed: %s", self.ws_url, err)
+
+
 class _Endpoint:
     def __init__(self, url: str):
         self.url = url
+        self.progress = _Progress(url)
         self.last_ok: tuple[float, dict] | None = None
         self.last_error: str | None = None
         self.job_id: str | None = None      # running job, as last seen
         self.job_seen = 0.0                 # when it was first seen running
+        self.job_graph = None
         self.last_job: dict | None = None
         self.history_at: float | None = None
 
@@ -168,16 +263,22 @@ class _Endpoint:
             timed_out = isinstance(err, TimeoutError) or isinstance(getattr(err, "reason", None), TimeoutError)
             grace = STALE_TIMEOUT_MAX_S if timed_out else STALE_MAX_S
             if self.last_ok and time.monotonic() - self.last_ok[0] < grace:
-                return {**self.last_ok[1], "stale": True, "error": out["error"]}
+                # /queue times out during heavy renders; the reader still has fresh steps.
+                cached = self.last_ok[1]
+                step = self.progress.for_job(self.job_id, self.job_graph) if cached.get("running") else None
+                return {**cached, "stale": True, "error": out["error"], "progress": step}
             return out
         now = time.monotonic()
         if self.last_error:
             log.warning("%s/queue recovered", self.url)
             self.last_error = None
+        self.progress.start()
 
         current = running[0] if running else None
         job_id = current[1] if current else None
+        extra = current[3] if current else None
         changed = job_id != self.job_id
+        self.job_graph = current[2] if current else None
         if changed:
             self.job_id, self.job_seen = job_id, now
         self._refresh_history(now, changed)
@@ -194,6 +295,9 @@ class _Endpoint:
             pending=len(pending),
             model=job_model(current[2]) if current else None,
             job_elapsed_s=round(now - self.job_seen) if current else None,
+            progress=self.progress.for_job(job_id, current[2]) if current else None,
+            # ComfyUI treats client_id null as "no client" and broadcasts.
+            progress_private=isinstance(extra, dict) and extra.get("client_id") is not None,
             last_job=last,
         )
         self.last_ok = (now, out)
@@ -209,9 +313,11 @@ _detected_at = -DETECT_TTL_S
 def _collect_all(cfg: dict) -> dict:
     """{"detected": bool, "servers": [...]} for this node, per the [comfyui] config."""
     global _detected, _detected_at
-    if not cfg["enabled"]:
-        return {"detected": False, "servers": []}
     with _lock:
+        if not cfg["enabled"]:
+            while _endpoints:
+                _endpoints.popitem()[1].progress.close()
+            return {"detected": False, "servers": []}
         urls = [u.rstrip("/") for u in cfg["endpoints"]]
         if not urls:
             now = time.monotonic()
@@ -219,7 +325,7 @@ def _collect_all(cfg: dict) -> dict:
                 _detected, _detected_at = detect_endpoints(), now
             urls = _detected
         for gone in _endpoints.keys() - set(urls):
-            del _endpoints[gone]
+            _endpoints.pop(gone).progress.close()
         servers = [_endpoints.setdefault(u, _Endpoint(u)).collect() for u in urls]
     return {"detected": any(s["ok"] for s in servers), "servers": servers}
 
