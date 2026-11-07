@@ -42,7 +42,8 @@ NO_STORE = {"Cache-Control": "no-store"}
 #   node pollers   one loop per configured node, every board.refresh_ms, so
 #                  an unreachable node burning its timeout delays only itself
 #
-# vLLM has its own loop in vllm_probe (scrape_interval_s), for the same reason.
+# vLLM and ComfyUI have their own loops in vllm_probe and comfy_probe
+# (scrape_interval_s), for the same reason.
 
 REMOTE_TIMEOUT_S = 3.0
 # A node that misses a poll keeps its last data, flagged stale, this long.
@@ -97,8 +98,9 @@ def _start_local_sampler() -> bool:
         _local.set({"ok": False, "error": f"no local collectors on this host ({err})"})
         return False
 
-    from .vllm_probe import start_sampler
-    start_sampler(lambda: get_config()["vllm"])
+    from . import comfy_probe, vllm_probe
+    vllm_probe.start_sampler(lambda: get_config()["vllm"])
+    comfy_probe.start_sampler(lambda: get_config()["comfyui"])
 
     def sample():
         _local.set({"ok": True, "data": get_metrics(), "at": time.monotonic()})
@@ -198,6 +200,7 @@ def frontend_config(cfg: dict) -> dict:
         "board": cfg["board"],
         "cards": cfg["cards"],
         "vllm": {k: cfg["vllm"][k] for k in ("enabled", "metrics", "sparkline", "placement")},
+        "comfyui": {"enabled": cfg["comfyui"]["enabled"]},
     }
 
 

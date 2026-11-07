@@ -11,7 +11,7 @@ const SPARK_POINTS = 60;
 let refreshMs = 2000;
 let configKey = '';
 const nodeState = new Map();   // node key -> {key, el, cards, history}
-let inference = null;          // board-wide vLLM band when vllm.placement = "top"
+let topRow = null;             // blocks above the node columns when vllm.placement = "top"
 
 /* ---------- helpers ---------- */
 
@@ -121,6 +121,12 @@ const CARDS = {
     title: 'INFERENCE · vLLM',
     build: () => '<div data-f="servers"></div>',
     update: updateVLLM,
+  },
+
+  comfyui: {
+    title: 'COMFYUI',
+    build: () => '<div data-f="servers"></div>',
+    update: updateComfy,
   },
 
   gpu: {
@@ -404,6 +410,56 @@ function updateVLLM(F, data, _opts, ctx) {
   F.html('servers', html);
 }
 
+/* ---------- ComfyUI ---------- */
+
+const COMFY_RESULT = {
+  success: ['green', 'OK'], error: ['red', 'Error'], interrupted: ['yellow', 'Stopped'],
+};
+
+function fmtElapsed(sec) {
+  if (sec == null) return '—';
+  const whole = Math.round(sec);
+  if (whole < 90) return whole + ' s';
+  return Math.floor(whole / 60) + ' min ' + String(whole % 60).padStart(2, '0') + ' s';
+}
+
+function comfyLastJob(job) {
+  if (!job) return 'no finished jobs yet';
+  const parts = ['last job' + (job.model ? ' ' + job.model : '')];
+  if (job.ago_s != null) parts.push(fmtAgo(job.ago_s) + ' ago');
+  if (job.error) parts.push(job.error);
+  return parts.join(' · ');
+}
+
+function updateComfy(F, data, _opts, ctx) {
+  if (ctx.comfyui.enabled === false) return false;
+  const servers = data.comfyui ? data.comfyui.servers : [];
+  if (!servers.length) return false;
+
+  F.html('servers', servers.map(s => {
+    if (!s.ok) {
+      return '<div class="comfy-server"><div class="vllm-head"><span class="net-state down">DOWN</span>' +
+        '<span class="vllm-ep">' + esc(s.endpoint) + '</span>' +
+        (s.node ? '<span class="vllm-node">on ' + esc(s.node) + '</span>' : '') +
+        '</div><div class="muted">' + esc(s.error) + '</div></div>';
+    }
+    const state = s.running > 0 ? ['up', 'RENDERING'] : s.pending > 0 ? ['up', 'QUEUED'] : ['idle', 'IDLE'];
+    const last = s.last_job;
+    const [cls, word] = last ? COMFY_RESULT[last.result] || ['dim', last.result] : ['dim', '—'];
+    const tile = (label, value, hero) => '<div class="tile' + (hero ? ' tile-hero' : '') +
+      '"><span class="tile-label">' + label + '</span><span class="tile-value">' + value + '</span></div>';
+    return '<div class="comfy-server"><div class="vllm-head"><span class="net-state ' + state[0] + '">' + state[1] +
+      '</span><span class="vllm-model" title="' + esc(s.endpoint) + '">' + esc(s.model || s.endpoint) + '</span>' +
+      (s.node ? '<span class="vllm-node">on ' + esc(s.node) + '</span>' : '') + '</div>' +
+      '<div class="tiles">' + tile('Queued', s.pending, true) + tile('Running', s.running) +
+      tile('Elapsed', fmtElapsed(s.job_elapsed_s)) +
+      tile('Last job', '<span class="' + cls + '">' + esc(word) + '</span>' +
+        (last && last.duration_s != null ? '<small> ' + fmtElapsed(last.duration_s) + '</small>' : '')) +
+      '</div><div class="vllm-foot">' + (s.stale ? '<span class="warn" title="' + esc(s.error) +
+      '">stats delayed, showing last read · </span>' : '') + esc(comfyLastJob(last)) + '</div></div>';
+  }).join(''));
+}
+
 /* ---------- nodes ---------- */
 
 function nodeHeader(info, data) {
@@ -452,7 +508,7 @@ function renderNode(state, node, cfg) {
   el.querySelector('.node-meta').textContent = nodeHeader(info, data);
   el.dataset.kernel = info.kernel || '';
 
-  const ctx = { vllm: cfg.vllm, history: state.history };
+  const ctx = { vllm: cfg.vllm, comfyui: cfg.comfyui, history: state.history };
   for (const card of el.querySelectorAll('.card')) {
     const name = card.dataset.card;
     try {
@@ -470,24 +526,18 @@ function renderBoard(payload) {
   const board = document.getElementById('board');
   const key = JSON.stringify(cfg) + '|' + payload.nodes.map(n => n.url + n.name + n.cards).join(',');
 
-  const top = cfg.vllm.placement === 'top' && cfg.board.cards.includes('vllm');
+  const topCards = cfg.vllm.placement === 'top'
+    ? ['vllm', 'comfyui'].filter(c => cfg.board.cards.includes(c)) : [];
 
   if (key !== configKey) {
     configKey = key;
     board.innerHTML = '';
-    if (top) {
-      // One band across every node column, gathering each node's servers.
-      inference = { el: document.createElement('section'), history: inference ? inference.history : {} };
-      inference.el.className = 'card inference';
-      inference.el.innerHTML = '<h2 class="card-title">' + CARDS.vllm.title + '</h2>' + CARDS.vllm.build();
-      board.appendChild(inference.el);
-    } else {
-      inference = null;
-    }
+    topRow = topCards.length ? buildTop(payload.nodes, topCards, topRow) : null;
+    if (topRow) board.appendChild(topRow.el);
     const keep = new Map();
     payload.nodes.forEach((node, i) => {
       const id = i + '|' + node.url;
-      const cards = (node.cards || cfg.board.cards).filter(c => CARDS[c] && !(top && c === 'vllm'));
+      const cards = (node.cards || cfg.board.cards).filter(c => CARDS[c] && !topCards.includes(c));
       const prev = nodeState.get(id);
       const state = { el: buildNode(node, cfg, cards), history: prev ? prev.history : {}, seen: false };
       keep.set(id, state);
@@ -504,7 +554,7 @@ function renderBoard(payload) {
   }
 
   payload.nodes.forEach((node, i) => renderNode(nodeState.get(i + '|' + node.url), node, cfg));
-  if (inference) renderInference(payload, cfg);
+  if (topRow) renderTop(payload, cfg);
 
   const ok = payload.nodes.filter(n => n.ok).length;
   document.getElementById('node-count').textContent =
@@ -515,22 +565,75 @@ function renderBoard(payload) {
   document.getElementById('last-refresh').textContent = 'Last update: ' + new Date().toLocaleTimeString();
 }
 
-function renderInference(payload, cfg) {
-  const servers = [];
-  let reporting = false;
-  for (const node of payload.nodes) {
-    if (!node.ok || !node.data.vllm) continue;
-    reporting = true;
+/* One slot per node, lined up with the node columns; a slot can hold both
+ * blocks. Block rows are built up front and shown or hidden per refresh. */
+function buildTop(nodes, cards, prev) {
+  const el = document.createElement('div');
+  el.className = 'top-row';
+  const slots = nodes.map((_, i) => {
+    const slot = document.createElement('div');
+    slot.className = 'top-slot';
+    slot.style.setProperty('--slot', i + 1);
+    const blocks = {};
+    for (const name of cards) {
+      const card = document.createElement('section');
+      card.className = 'card inference';
+      card.innerHTML = '<h2 class="card-title">' + CARDS[name].title + '</h2>' + CARDS[name].build();
+      slot.appendChild(card);
+      blocks[name] = card;
+    }
+    el.appendChild(slot);
+    return { el: slot, blocks };
+  });
+  return { el, slots, history: prev ? prev.history : {} };
+}
+
+function renderTop(payload, cfg) {
+  const tagged = (node, key) => {
+    if (!node.ok || !node.data[key]) return [];
     const name = node.name || node.data.hostname || node.url;
-    for (const s of node.data.vllm.servers) servers.push(Object.assign({ node: name }, s));
-  }
-  const data = { vllm: reporting ? { detected: servers.some(s => s.ok), servers } : undefined };
-  try {
-    const shown = updateVLLM(fields(inference.el), data, {}, { vllm: cfg.vllm, history: inference.history });
-    inference.el.classList.toggle('hidden', shown === false);
-  } catch (err) {
-    console.error('SparkView: inference band failed to render', err);
-  }
+    return node.data[key].servers.map(s => Object.assign({ node: name }, s));
+  };
+  const vllm = payload.nodes.map(n => tagged(n, 'vllm'));
+  // The board's own config decides, even when a node still reports ComfyUI.
+  const showComfy = cfg.comfyui.enabled !== false && cfg.board.cards.includes('comfyui');
+  const comfy = payload.nodes.map(n => (showComfy ? tagged(n, 'comfyui') : []));
+  const reporting = payload.nodes.some(n => n.ok && n.data.vllm);
+  const inferring = vllm.filter(s => s.length).length;
+  const anyComfy = comfy.some(s => s.length);
+
+  // A lone inference block goes full width: a cluster reports from its head
+  // only, and nothing tells that apart from one node serving alone. ComfyUI
+  // blocks never span; they stay above their own node.
+  const wide = !anyComfy && inferring <= 1 ? Math.max(0, vllm.findIndex(s => s.length)) : -1;
+  // vllm.enabled = true keeps a "not detected" block; updateVLLM decides.
+  const placeholder = inferring ? -1 : 0;
+
+  const ctx = { vllm: cfg.vllm, comfyui: cfg.comfyui, history: topRow.history };
+  let visible = false;
+  topRow.slots.forEach((slot, i) => {
+    const data = {
+      vllm: reporting ? { servers: vllm[i] } : undefined,
+      comfyui: { servers: comfy[i] },
+    };
+    let used = false;
+    for (const [name, card] of Object.entries(slot.blocks)) {
+      let shown = false;
+      if (name === 'comfyui' || vllm[i].length || i === placeholder) {
+        try {
+          shown = CARDS[name].update(fields(card), data, {}, ctx) !== false;
+        } catch (err) {
+          console.error('SparkView: top block ' + name + ' failed to render', err);
+        }
+      }
+      card.classList.toggle('hidden', !shown);
+      used = used || shown;
+    }
+    slot.el.classList.toggle('hidden', !used);
+    slot.el.classList.toggle('wide', i === wide);
+    visible = visible || used;
+  });
+  topRow.el.classList.toggle('hidden', !visible);
 }
 
 /* ---------- theme ----------

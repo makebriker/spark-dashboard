@@ -83,3 +83,14 @@ def test_theme_names_match_the_header_picker():
     assert re.findall(r'<option value="(\w+)"', html) == list(config.THEMES)
     for name in config.THEMES[1:]:
         assert f'[data-theme="{name}"]' in css
+
+
+def test_comfyui_defaults_and_bad_values():
+    cfg = _cfg({})
+    assert "comfyui" in cfg["board"]["cards"]
+    assert cfg["comfyui"] == {"enabled": True, "endpoints": [], "scrape_interval_s": 3.0}
+    assert _cfg({"comfyui": {"enabled": "maybe"}})["comfyui"]["enabled"] is True
+    assert _cfg({"comfyui": {"scrape_interval_s": 0}})["comfyui"]["scrape_interval_s"] == 1
+    import pytest
+    with pytest.raises(TypeError):
+        _cfg({"comfyui": {"endpoints": "http://x"}})

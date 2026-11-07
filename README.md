@@ -17,6 +17,8 @@ Web dashboard for the NVIDIA Grace Blackwell GB10 (ASUS GX10) that exposes Spark
   decode throughput (aggregate and per stream), prefill rate, running/waiting requests,
   KV-cache use, TTFT, time per output token, prefix-cache hit rate and more, with a
   decode-throughput sparkline
+- **ComfyUI** — detected automatically when ComfyUI runs on the node: running and
+  queued jobs, the current job's model and elapsed time, and the last job's result
 - **Multi-node** — up to 4 Sparks on one board, side by side or stacked
 - **Configurable** — which cards appear, in what order, per-card filters, which vLLM
   numbers to show — from one TOML file, applied live without a restart
@@ -103,6 +105,36 @@ A TensorFold server (`tensorfold serve ...`, rank 0 only; `--port` and `--contex
 the same way) is detected too. It exposes no histograms or KV-cache gauge, so waiting,
 KV cache and TTFT show as `—`; per-stream speed is decode rounds per decode-second.
 
+### ComfyUI
+
+With `[comfyui] enabled = true` the node scans its process table for ComfyUI
+(a Python process running `main.py`, with "comfy" in the interpreter path, script
+path or working directory), takes `--port` from the command line (default 8188), and reads
+`http://127.0.0.1:<port>/queue` every `scrape_interval_s`. Anything else: list the URL
+under `endpoints`.
+
+The block shows running and queued jobs, the running job's model and elapsed time, and
+the last finished job. Elapsed time counts from the first scrape that saw the job
+running. There is no step progress, because ComfyUI publishes it only on its WebSocket,
+not over HTTP.
+
+### Top blocks
+
+With `vllm.placement = "top"` the inference and ComfyUI blocks sit above the node
+columns:
+
+| Nodes | Top area |
+|---|---|
+| Cluster, or inference on one node with the other idle | One full-width inference block |
+| Inference on one node, ComfyUI on the other | Two blocks, each above its node |
+| ComfyUI on both | Two ComfyUI blocks |
+| Inference on both (a replica per node) | Two inference blocks |
+| ComfyUI on one node, other idle | One ComfyUI block above that node |
+
+A cluster and a single serving node look the same to the board, because a cluster
+reports only from its head. A node with ComfyUI running and an empty queue still gets
+its block, marked `IDLE`.
+
 ## Deploy configuration
 
 | Variable | Default | Description |
@@ -123,20 +155,22 @@ GB10s and on vLLM is the same for one viewer or fifty:
 |---|---|---|
 | local sampler | `board.refresh_ms` | this host's hardware (GB10s only) |
 | vLLM sampler | `vllm.scrape_interval_s` (5 s) | one `/metrics` scrape per server |
+| ComfyUI sampler | `comfyui.scrape_interval_s` (3 s) | one `/queue` read per server |
 | board poller | `board.refresh_ms` | every configured node's `/api/metrics` |
 
 A missed poll or a slow vLLM answer keeps the last good data, marked delayed,
 for 30 s before anything is shown as down.
 
-- `GET /api/metrics` — this node's latest sample, including a `vllm` block. What
+- `GET /api/metrics` — this node's latest sample, including `vllm` and `comfyui` blocks. What
   other boards and metrics-poller read. 503 on a host with no local collectors.
 - `GET /api/board` — what the page renders: the frontend-relevant config plus every
   configured node's latest data (`{name, url, ok, stale?, error?, data?}`).
 
 ## Tests
 
-The pure logic (Prometheus parsing, vLLM rate windows, the 15 s network
-average, config merge and validation) is covered without any hardware:
+The pure logic (Prometheus parsing, vLLM rate windows, ComfyUI detection and queue
+parsing, the 15 s network average, config merge and validation) is covered without
+any hardware. The top-block layout in `dashboard.js` has no automated test:
 
 ```bash
 .venv/bin/pip install -r requirements-dev.txt
@@ -159,6 +193,7 @@ Browser ──HTTP──> uvicorn (FastAPI)
                       ├── spark_dashboard.config (config.toml, hot-reloaded)
                       ├── spark_dashboard.collectors (metric aggregation)
                       ├── spark_dashboard.vllm_probe (vLLM detection + /metrics)
+                      ├── spark_dashboard.comfy_probe (ComfyUI detection + /queue)
                       ├── other nodes' /api/metrics (multi-node boards)
                       │
                       ├── spark_dashboard.net_extra ─────┐  local fixes over

@@ -25,7 +25,7 @@ log = logging.getLogger("spark_dashboard.config")
 
 MAX_NODES = 4
 
-CARDS = ("vllm", "gpu", "memory", "cpu", "clock", "network", "disk")
+CARDS = ("vllm", "comfyui", "gpu", "memory", "cpu", "clock", "network", "disk")
 
 VLLM_METRICS = (
     "decode_tps",     # aggregate generation throughput, tok/s
@@ -82,9 +82,18 @@ DEFAULTS: dict = {
         # server takes ~0.7 s to answer, so keep this well above that.
         "scrape_interval_s": 5,
         "sparkline": True,
-        # "top": one full-width band above the node columns, gathering every
-        # node's servers. "node": a card inside the column of the node serving.
+        # "top": blocks above the node columns, each above its own node (a lone
+        # inference block goes full width). "node": a card inside the column of
+        # the node serving. Applies to the ComfyUI block too.
         "placement": "top",
+    },
+    "comfyui": {
+        # true: scan for a running ComfyUI and show its queue; false: never probe.
+        "enabled": True,
+        # Explicit base URLs, e.g. ["http://127.0.0.1:8188"]. Empty = detect
+        # from the process table (`python main.py ... --port N`).
+        "endpoints": [],
+        "scrape_interval_s": 3,
     },
     # Each node: name + url. "local" is collected in-process; anything else is
     # fetched from that node's own dashboard at <url>/api/metrics.
@@ -135,6 +144,14 @@ def _validate(cfg: dict) -> dict:
     if vllm["placement"] not in ("top", "node"):
         log.warning("vllm.placement must be 'top' or 'node', got %r", vllm["placement"])
         vllm["placement"] = "top"
+
+    comfy = cfg["comfyui"]
+    if not isinstance(comfy["endpoints"], list):
+        raise TypeError("comfyui.endpoints must be a list")
+    if not isinstance(comfy["enabled"], bool):
+        log.warning("comfyui.enabled must be true or false, got %r", comfy["enabled"])
+        comfy["enabled"] = True
+    comfy["scrape_interval_s"] = max(1, float(comfy["scrape_interval_s"]))
 
     if not isinstance(cfg["nodes"], list):
         raise TypeError("nodes must be an array of tables ([[nodes]])")

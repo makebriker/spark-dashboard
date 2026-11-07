@@ -16,8 +16,8 @@ layout = "columns"
 # Known: classic, refined, quiet, terminal, light, wall
 theme = "classic"
 # Which cards to show, in this order. Drop a name to hide that card.
-# Known: vllm, gpu, memory, cpu, clock, network, disk
-cards = ["vllm", "gpu", "memory", "cpu", "clock", "network", "disk"]
+# Known: vllm, comfyui, gpu, memory, cpu, clock, network, disk
+cards = ["vllm", "comfyui", "gpu", "memory", "cpu", "clock", "network", "disk"]
 
 [cards.gpu]
 processes = 5            # rows in the GPU process table; 0 hides it
@@ -68,9 +68,20 @@ metrics = ["decode_tps", "stream_tps", "prefill_tps", "running", "waiting",
 rate_window_s = 10       # rates and latency means are taken over this window
 scrape_interval_s = 5    # one scrape per server per interval, however many viewers
 sparkline = true         # decode-throughput history graph
-# "top":  one full-width band above all node columns (each server labelled
-#         with its node). "node": a card inside the serving node's column.
+# "top":  blocks above the node columns, each above its own node. A lone
+#         inference block goes full width; a ComfyUI block never does.
+# "node": a card inside the serving node's column.
+# Applies to the ComfyUI block too.
 placement = "top"
+
+[comfyui]
+# true:  probe for a running ComfyUI and show its queue when found.
+# false: never probe, never show.
+enabled = true
+# Explicit server base URLs. Empty = detect from the process table
+# (`python main.py ... --port N`, default 8188).
+endpoints = []
+scrape_interval_s = 3    # one /queue read per server per interval, however many viewers
 
 # Up to 4 nodes on one board. "local" is this machine, collected in-process.
 # Any other url is another Spark running this dashboard; the board fetches its
