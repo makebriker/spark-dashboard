@@ -25,7 +25,7 @@ log = logging.getLogger("spark_dashboard.config")
 
 MAX_NODES = 4
 
-CARDS = ("vllm", "comfyui", "gpu", "memory", "cpu", "clock", "network", "disk")
+CARDS = ("vllm", "comfyui", "training", "gpu", "memory", "cpu", "clock", "network", "disk")
 
 VLLM_METRICS = (
     "decode_tps",     # aggregate generation throughput, tok/s
@@ -84,7 +84,7 @@ DEFAULTS: dict = {
         "sparkline": True,
         # "top": blocks above the node columns, each above its own node (a lone
         # inference block goes full width). "node": a card inside the column of
-        # the node serving. Applies to the ComfyUI block too.
+        # the node serving. Applies to the ComfyUI and training blocks too.
         "placement": "top",
     },
     "comfyui": {
@@ -94,6 +94,11 @@ DEFAULTS: dict = {
         # from the process table (`python main.py ... --port N`).
         "endpoints": [],
         "scrape_interval_s": 3,
+    },
+    "training": {
+        # true: scan for an ai-toolkit training run and read its log; false: never.
+        "enabled": True,
+        "scrape_interval_s": 5,
     },
     # Each node: name + url. "local" is collected in-process; anything else is
     # fetched from that node's own dashboard at <url>/api/metrics.
@@ -152,6 +157,12 @@ def _validate(cfg: dict) -> dict:
         log.warning("comfyui.enabled must be true or false, got %r", comfy["enabled"])
         comfy["enabled"] = True
     comfy["scrape_interval_s"] = max(1, float(comfy["scrape_interval_s"]))
+
+    train = cfg["training"]
+    if not isinstance(train["enabled"], bool):
+        log.warning("training.enabled must be true or false, got %r", train["enabled"])
+        train["enabled"] = True
+    train["scrape_interval_s"] = max(1, float(train["scrape_interval_s"]))
 
     if not isinstance(cfg["nodes"], list):
         raise TypeError("nodes must be an array of tables ([[nodes]])")

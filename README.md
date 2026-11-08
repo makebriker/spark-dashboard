@@ -123,10 +123,38 @@ needs the `websockets` package. ComfyUI broadcasts progress only for jobs submit
 without a `client_id`. A job that has one, such as a job from the ComfyUI web page,
 shows no step bar, and the block says so.
 
+### Training
+
+With `[training] enabled = true` the node looks for an
+[ai-toolkit](https://github.com/ostris/ai-toolkit) run, meaning `python run.py
+<config>.yaml` started from an ai-toolkit checkout. It reads the file the run's stdout
+points to (`/proc/<pid>/fd/1`), so no path needs configuring. tqdm's progress bars go to
+stderr, so launch with both in one file: `> train.log 2>&1`. With stderr elsewhere the
+block stays at `STARTING`. The log is read from the start, at most 8 MB per
+`scrape_interval_s`, then only new bytes. A log that another run was appended to (`>>`)
+is read from its last `Running 1 job` line.
+
+The block shows:
+
+- The phase: `TRAINING`, `SAMPLING`, `SAVING`, `CACHING` or `LOADING`.
+- A step bar, and a second bar for the sample or cache bar when one is running.
+- A smoothed loss curve and the current loss.
+- Seconds per step, the next sample or save step, and the last checkpoint.
+
+The rate comes from the training bar's own elapsed time and leaves out the steps
+that included sampling or saving. The ETA adds one measured sample round for each one
+still to come, including the round ai-toolkit runs after the last step. A finished run
+stays as `DONE`, `STOPPED` or `FAILED` (with the error's last line) until a new run
+starts or 6 hours pass. Sample images are counted, never shown. While a node is
+training, its ComfyUI block is hidden if the queue is empty.
+
+Log format checked 2026-11-07 against two runs on gb10-2 (one finished, one in
+progress). Detection checked 2026-11-08 by replaying a log on gb10-2.
+
 ### Top blocks
 
-With `vllm.placement = "top"` the inference and ComfyUI blocks sit above the node
-columns:
+With `vllm.placement = "top"` the inference, ComfyUI and training blocks sit above
+the node columns:
 
 | Nodes | Top area |
 |---|---|
@@ -135,10 +163,11 @@ columns:
 | ComfyUI on both | Two ComfyUI blocks |
 | Inference on both (a replica per node) | Two inference blocks |
 | ComfyUI on one node, other idle | One ComfyUI block above that node |
+| Training on a node | A training block above that node, never full width |
 
 A cluster and a single serving node look the same to the board, because a cluster
 reports only from its head. A node with ComfyUI running and an empty queue still gets
-its block, marked `IDLE`.
+its block, marked `IDLE`, unless that node is training. Blocks on the same node stack.
 
 ## Deploy configuration
 
@@ -162,12 +191,13 @@ GB10s and on vLLM is the same for one viewer or fifty:
 | vLLM sampler | `vllm.scrape_interval_s` (5 s) | one `/metrics` scrape per server |
 | ComfyUI sampler | `comfyui.scrape_interval_s` (3 s) | one `/queue` read per server |
 | ComfyUI reader | continuous | one WebSocket per server, for step progress |
+| training sampler | `training.scrape_interval_s` (5 s) | new lines of each run's log |
 | board poller | `board.refresh_ms` | every configured node's `/api/metrics` |
 
 A missed poll or a slow vLLM answer keeps the last good data, marked delayed,
 for 30 s before anything is shown as down.
 
-- `GET /api/metrics` — this node's latest sample, including `vllm` and `comfyui` blocks. What
+- `GET /api/metrics` — this node's latest sample, including `vllm`, `comfyui` and `training` blocks. What
   other boards and metrics-poller read. 503 on a host with no local collectors.
 - `GET /api/board` — what the page renders: the frontend-relevant config plus every
   configured node's latest data (`{name, url, ok, stale?, error?, data?}`).

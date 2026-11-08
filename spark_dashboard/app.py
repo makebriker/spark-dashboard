@@ -42,7 +42,7 @@ NO_STORE = {"Cache-Control": "no-store"}
 #   node pollers   one loop per configured node, every board.refresh_ms, so
 #                  an unreachable node burning its timeout delays only itself
 #
-# vLLM and ComfyUI have their own loops in vllm_probe and comfy_probe
+# vLLM, ComfyUI and training have their own loops in vllm_probe, comfy_probe and train_probe
 # (scrape_interval_s), for the same reason.
 
 REMOTE_TIMEOUT_S = 3.0
@@ -98,9 +98,10 @@ def _start_local_sampler() -> bool:
         _local.set({"ok": False, "error": f"no local collectors on this host ({err})"})
         return False
 
-    from . import comfy_probe, vllm_probe
+    from . import comfy_probe, train_probe, vllm_probe
     vllm_probe.start_sampler(lambda: get_config()["vllm"])
     comfy_probe.start_sampler(lambda: get_config()["comfyui"])
+    train_probe.start_sampler(lambda: get_config()["training"])
 
     def sample():
         _local.set({"ok": True, "data": get_metrics(), "at": time.monotonic()})
@@ -201,6 +202,7 @@ def frontend_config(cfg: dict) -> dict:
         "cards": cfg["cards"],
         "vllm": {k: cfg["vllm"][k] for k in ("enabled", "metrics", "sparkline", "placement")},
         "comfyui": {"enabled": cfg["comfyui"]["enabled"]},
+        "training": {"enabled": cfg["training"]["enabled"]},
     }
 
 

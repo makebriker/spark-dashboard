@@ -442,6 +442,8 @@ header {
 .comfy-server .tile-value .yellow { color: var(--yellow); }
 .comfy-server .tile-value .red { color: var(--red); }
 .comfy-server .tile-value .dim { color: var(--text-dim); }
+.net-state.warn { background: color-mix(in srgb, var(--yellow) 22%, transparent); color: var(--yellow); }
+.train-run .tile-value small { white-space: nowrap; }
 .inference [data-f="servers"] {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(560px, 100%), 1fr));

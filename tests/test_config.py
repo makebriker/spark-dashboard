@@ -94,3 +94,11 @@ def test_comfyui_defaults_and_bad_values():
     import pytest
     with pytest.raises(TypeError):
         _cfg({"comfyui": {"endpoints": "http://x"}})
+
+
+def test_training_defaults_and_bad_values():
+    cfg = _cfg({})
+    assert "training" in cfg["board"]["cards"]
+    assert cfg["training"] == {"enabled": True, "scrape_interval_s": 5.0}
+    assert _cfg({"training": {"enabled": "maybe"}})["training"]["enabled"] is True
+    assert _cfg({"training": {"scrape_interval_s": 0}})["training"]["scrape_interval_s"] == 1

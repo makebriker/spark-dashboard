@@ -129,6 +129,12 @@ const CARDS = {
     update: updateComfy,
   },
 
+  training: {
+    title: 'TRAINING',
+    build: () => '<div data-f="servers"></div>',
+    update: updateTraining,
+  },
+
   gpu: {
     title: 'GPU',
     build: () =>
@@ -470,6 +476,98 @@ function updateComfy(F, data, _opts, ctx) {
   }).join(''));
 }
 
+/* ---------- training (ai-toolkit) ---------- */
+
+const TRAIN_STATE = {
+  TRAINING: 'up', SAMPLING: 'up', SAVING: 'up', CACHING: 'up', LOADING: 'up', WORKING: 'up', STARTING: 'idle',
+  DONE: 'idle', STOPPED: 'warn', FAILED: 'down',
+};
+
+function fmtLong(sec) {
+  if (sec == null) return '—';
+  const whole = Math.round(sec);
+  if (whole < 90) return whole + ' s';
+  if (whole < 5400) return Math.round(whole / 60) + ' min';
+  const min = Math.round(whole / 60);
+  return Math.floor(min / 60) + ' h ' + String(min % 60).padStart(2, '0') + ' min';
+}
+
+function lossCurve(points) {
+  if (points.length < 2) return '';
+  const lo = Math.min(...points), hi = Math.max(...points);
+  const span = hi - lo || 1;
+  const w = 200, h = 36;
+  const xy = points.map((v, i) =>
+    (i / (points.length - 1) * w).toFixed(1) + ',' + (h - 2 - (v - lo) / span * (h - 4)).toFixed(1));
+  return '<svg class="spark" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none">' +
+    '<polygon class="spark-fill" points="0,' + h + ' ' + xy.join(' ') + ' ' + w + ',' + h + '"/>' +
+    '<polyline class="spark-line" points="' + xy.join(' ') + '"/></svg>' +
+    '<span class="spark-max">loss ' + hi.toPrecision(3) + ' – ' + lo.toPrecision(3) + '</span>';
+}
+
+function trainBar(label, value, max, cls) {
+  const pct = max ? value / max * 100 : 0;
+  return '<div class="metric-row comfy-step"><span class="label" title="' + esc(label) + '">' + esc(label) + '</span>' +
+    '<div class="bar-track"><div class="bar-fill ' + cls + '" style="width:' + Math.min(100, pct).toFixed(1) + '%"></div></div>' +
+    '<span class="value">' + esc(value) + ' / ' + esc(max) + '</span></div>';
+}
+
+// Tiles are ~92 px wide: big digits, units and words in <small>.
+function fmtEta(sec) {
+  const min = Math.round(sec / 60);
+  if (min < 1) return Math.round(sec) + '<small> s</small>';
+  if (min < 90) return min + '<small> min</small>';
+  return Math.floor(min / 60) + '<small> h </small>' + String(min % 60).padStart(2, '0') + '<small> min</small>';
+}
+
+function trainNext(r) {
+  const { next_sample: sample, next_save: save } = r;
+  if (!sample && !save) return ['Next', '—'];
+  if (sample && (!save || sample <= save)) {
+    return ['Next sample', esc(sample) + (sample === save ? '<small> +save</small>' : '')];
+  }
+  return ['Next save', esc(save)];
+}
+
+function updateTraining(F, data, _opts, ctx) {
+  if (ctx.training && ctx.training.enabled === false) return false;
+  const runs = data.training ? data.training.runs : [];
+  if (!runs.length) return false;
+  const tile = (label, value, hero) => '<div class="tile' + (hero ? ' tile-hero' : '') +
+    '"><span class="tile-label">' + label + '</span><span class="tile-value">' + value + '</span></div>';
+
+  F.html('servers', runs.map(r => {
+    const ended = ['DONE', 'STOPPED', 'FAILED'].includes(r.state);
+    let html = '<div class="comfy-server train-run"><div class="vllm-head"><span class="net-state ' +
+      (TRAIN_STATE[r.state] || 'idle') + '">' + esc(r.state) + '</span><span class="vllm-model" title="' +
+      esc(r.config) + '">' + esc(r.name) + '</span>' +
+      (r.node ? '<span class="vllm-node">on ' + esc(r.node) + '</span>' : '') + '</div>';
+    if (r.total) html += trainBar('Step', r.step, r.total, ended && r.state !== 'DONE' ? 'yellow' : 'green');
+    if (r.phase_bar && r.state !== 'TRAINING') html += trainBar(r.phase_bar.label, r.phase_bar.value, r.phase_bar.max, 'green');
+    if (r.loss_points && r.loss_points.length > 1) html += '<div class="spark-wrap">' + lossCurve(r.loss_points) + '</div>';
+
+    const ck = r.checkpoint;
+    html += '<div class="tiles">' +
+      (ended ? tile('Ran for', fmtEta(r.running_s), true) : tile('ETA ≈', r.eta_s == null ? '—' : fmtEta(r.eta_s), true)) +
+      tile('Per step', r.s_per_step == null ? '—' : num(r.s_per_step, 1) + '<small> s</small>') +
+      tile('Loss', r.loss == null ? '—' : esc(r.loss.toPrecision(3))) +
+      (ended ? '' : tile(...trainNext(r))) +
+      tile('Checkpoint', ck ? (ck.final ? 'final' : esc(ck.step)) : '—') +
+      '</div>';
+
+    const foot = [];
+    if (r.log_error) foot.push('<span class="warn">log not readable: ' + esc(r.log_error) + '</span>');
+    if (r.error) foot.push('<span class="warn">' + esc(r.error) + '</span>');
+    if (ended && r.ended_ago_s != null) foot.push('ended ' + fmtAgo(r.ended_ago_s) + ' ago');
+    else foot.push('running ' + fmtLong(r.running_s));
+    if (ck && ck.ago_s != null) foot.push('checkpoint saved ' + fmtAgo(ck.ago_s) + ' ago');
+    if (r.samples) foot.push(r.samples.count + ' sample' + (r.samples.count === 1 ? '' : 's') +
+      (r.samples.ago_s != null ? ', newest ' + fmtAgo(r.samples.ago_s) + ' ago' : ''));
+    if (!ended && r.eta_s != null && r.sample_s) foot.push('ETA counts ' + fmtLong(r.sample_s) + ' per sample round');
+    return html + '<div class="vllm-foot">' + foot.join(' · ') + '</div></div>';
+  }).join(''));
+}
+
 /* ---------- nodes ---------- */
 
 function nodeHeader(info, data) {
@@ -518,7 +616,7 @@ function renderNode(state, node, cfg) {
   el.querySelector('.node-meta').textContent = nodeHeader(info, data);
   el.dataset.kernel = info.kernel || '';
 
-  const ctx = { vllm: cfg.vllm, comfyui: cfg.comfyui, history: state.history };
+  const ctx = { vllm: cfg.vllm, comfyui: cfg.comfyui, training: cfg.training, history: state.history };
   for (const card of el.querySelectorAll('.card')) {
     const name = card.dataset.card;
     try {
@@ -537,7 +635,7 @@ function renderBoard(payload) {
   const key = JSON.stringify(cfg) + '|' + payload.nodes.map(n => n.url + n.name + n.cards).join(',');
 
   const topCards = cfg.vllm.placement === 'top'
-    ? ['vllm', 'comfyui'].filter(c => cfg.board.cards.includes(c)) : [];
+    ? ['vllm', 'comfyui', 'training'].filter(c => cfg.board.cards.includes(c)) : [];
 
   if (key !== configKey) {
     configKey = key;
@@ -599,37 +697,45 @@ function buildTop(nodes, cards, prev) {
 }
 
 function renderTop(payload, cfg) {
-  const tagged = (node, key) => {
-    if (!node.ok || !node.data[key]) return [];
+  const tagged = (node, key, list = 'servers') => {
+    if (!node.ok || !node.data[key] || !node.data[key][list]) return [];
     const name = node.name || node.data.hostname || node.url;
-    return node.data[key].servers.map(s => Object.assign({ node: name }, s));
+    return node.data[key][list].map(s => Object.assign({ node: name }, s));
   };
   const vllm = payload.nodes.map(n => tagged(n, 'vllm'));
   // The board's own config decides, even when a node still reports ComfyUI.
   const showComfy = cfg.comfyui.enabled !== false && cfg.board.cards.includes('comfyui');
-  const comfy = payload.nodes.map(n => (showComfy ? tagged(n, 'comfyui') : []));
+  const showTrain = cfg.training.enabled !== false && cfg.board.cards.includes('training');
+  const training = payload.nodes.map(n => (showTrain ? tagged(n, 'training', 'runs') : []));
+  // An idle ComfyUI on a node that is training says nothing; hide it there.
+  const comfy = payload.nodes.map((n, i) => {
+    const servers = showComfy ? tagged(n, 'comfyui') : [];
+    const busy = training[i].some(r => !['DONE', 'STOPPED', 'FAILED'].includes(r.state));
+    return busy ? servers.filter(s => !s.ok || s.running > 0 || s.pending > 0) : servers;
+  });
   const reporting = payload.nodes.some(n => n.ok && n.data.vllm);
   const inferring = vllm.filter(s => s.length).length;
-  const anyComfy = comfy.some(s => s.length);
+  const anyPinned = comfy.some(s => s.length) || training.some(s => s.length);
 
   // A lone inference block goes full width: a cluster reports from its head
   // only, and nothing tells that apart from one node serving alone. ComfyUI
-  // blocks never span; they stay above their own node.
-  const wide = !anyComfy && inferring <= 1 ? Math.max(0, vllm.findIndex(s => s.length)) : -1;
+  // and training blocks never span; they stay above their own node.
+  const wide = !anyPinned && inferring <= 1 ? Math.max(0, vllm.findIndex(s => s.length)) : -1;
   // vllm.enabled = true keeps a "not detected" block; updateVLLM decides.
   const placeholder = inferring ? -1 : 0;
 
-  const ctx = { vllm: cfg.vllm, comfyui: cfg.comfyui, history: topRow.history };
+  const ctx = { vllm: cfg.vllm, comfyui: cfg.comfyui, training: cfg.training, history: topRow.history };
   let visible = false;
   topRow.slots.forEach((slot, i) => {
     const data = {
       vllm: reporting ? { servers: vllm[i] } : undefined,
       comfyui: { servers: comfy[i] },
+      training: { runs: training[i] },
     };
     let used = false;
     for (const [name, card] of Object.entries(slot.blocks)) {
       let shown = false;
-      if (name === 'comfyui' || vllm[i].length || i === placeholder) {
+      if (name !== 'vllm' || vllm[i].length || i === placeholder) {
         try {
           shown = CARDS[name].update(fields(card), data, {}, ctx) !== false;
         } catch (err) {
